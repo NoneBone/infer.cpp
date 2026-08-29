@@ -7,9 +7,9 @@ class Buffer : public NoCopyable, std::enable_shared_from_this<Buffer> {
  private:
   size_t byte_size_ = 0;
   void* ptr_ = nullptr;
-  bool use_external_ = false;
+  bool use_external_ = false;// false 表示 需要Buffer对这块内存进行管理，而不是借用外部
   DeviceType device_type_ = DeviceType::kDeviceUnknown;
-  std::shared_ptr<DeviceAllocator> allocator_;
+  std::shared_ptr<DeviceAllocator> allocator_;// 负责资源的释放、申请以及拷贝
 
  public:
   explicit Buffer() = default;

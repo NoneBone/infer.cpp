@@ -211,7 +211,7 @@ std::string Model::decode(std::vector<int32_t> token_idxs) const {
   CHECK(this->encode_layer_ != nullptr);
   return this->encode_layer_->decode(token_idxs);
 }
-
+// 切分 KV-Cache
 std::pair<tensor::Tensor, tensor::Tensor> Model::slice_kv_cache(int32_t layer_idx,
                                                                 int32_t token_pos) const {
   int32_t layer_offset = layer_idx * config_->seq_len_ * config_->kv_dim_;

@@ -41,8 +41,8 @@ TEST(test_load, load_model_weight) {
   float* weight_data =
       reinterpret_cast<float*>(static_cast<int8_t*>(data) + sizeof(model::ModelConfig));
 
-  for (int i = 0; i < config.dim * config.hidden_dim; ++i) {
-    ASSERT_EQ(*(weight_data + i), float(i));
+  for (int i = 0; i < config.dim * config.hidden_dim - 1; ++i) {
+    ASSERT_EQ(*(weight_data + i), float(i+1));
   }
 }
 
@@ -64,8 +64,8 @@ TEST(test_load, create_matmul) {
   float* weight_data =
       reinterpret_cast<float*>(static_cast<int8_t*>(data) + sizeof(model::ModelConfig));
 
-  for (int i = 0; i < config.dim * config.hidden_dim; ++i) {
-    ASSERT_EQ(*(weight_data + i), float(i));
+  for (int i = 0; i < config.dim * config.hidden_dim-1; ++i) {
+    ASSERT_EQ(*(weight_data + i), float(i+1));
   }
   /**                                  1
    *    1 2 3 4 5 6 ... 1024           1
@@ -99,10 +99,11 @@ TEST(test_load, create_matmul) {
    *  input = np.ones(128)
    *  out = w@input
    */
-  ASSERT_EQ(out[0], 8128);
-  ASSERT_EQ(out[1], 24512);
-  ASSERT_EQ(out[14], 237504);
-  ASSERT_EQ(out[15], 253888);
+  ASSERT_EQ(out[0], 8256);
+  ASSERT_EQ(out[1], 24640);
+  ASSERT_EQ(out[14], 237632);
+  // test.bin contains values 1..2047, so the final row has only 127 values.
+  ASSERT_EQ(out[15], 251968);
 
   delete[] in;
   delete[] out;

@@ -75,21 +75,19 @@ TEST(test_tensor, clone_cpu) {
 
 TEST(test_tensor, to_cu) {
   using namespace base;
-  auto alloc_cpu = CPUDeviceAllocatorFactory::get_instance();
-  tensor::Tensor t1_cpu(DataType::kDataTypeFp32, 32, 32, true, alloc_cpu);
-  ASSERT_EQ(t1_cpu.is_empty(), false);
+  auto alloc = base::CPUDeviceAllocatorFactory::get_instance();
+  tensor::Tensor t1_cpu(base::DataType::kDataTypeFp32, 32, 32, true, alloc);
   float* p1 = t1_cpu.ptr<float>();
-  for (int i = 0; i < 32 * 32; ++i) {
-    *(p1 + i) = 1.f;
+  for(int i=0;i<32*32;i++){
+    p1[i] = 1.0f;
   }
-
   t1_cpu.to_cuda();
   float* p2 = new float[32 * 32];
-  cudaMemcpy(p2, t1_cpu.ptr<float>(), sizeof(float) * 32 * 32, cudaMemcpyDeviceToHost);
-  for (int i = 0; i < 32 * 32; ++i) {
-    ASSERT_EQ(*(p2 + i), 1.f);
+  cudaMemcpy(p2, t1_cpu.ptr<float>(), 32 * 32* sizeof(float), cudaMemcpyDeviceToHost);
+  
+  for(int i=0;i<32*32;i++){
+    ASSERT_EQ(p2[i], 1.0f);
   }
-  delete[] p2;
 }
 
 TEST(test_tensor, init1) {
@@ -102,16 +100,6 @@ TEST(test_tensor, init1) {
   ASSERT_EQ(t1.is_empty(), false);
 }
 
-TEST(test_tensor, init3) {
-  using namespace base;
-  float* ptr = new float[32];
-  ptr[0] = 31;
-  tensor::Tensor t1(base::DataType::kDataTypeFp32, 32, false, nullptr, ptr);
-  ASSERT_EQ(t1.is_empty(), false);
-  ASSERT_EQ(t1.ptr<float>(), ptr);
-  ASSERT_EQ(*t1.ptr<float>(), 31);
-}
-
 TEST(test_tensor, init2) {
   using namespace base;
   auto alloc_cu = base::CPUDeviceAllocatorFactory::get_instance();
@@ -120,6 +108,16 @@ TEST(test_tensor, init2) {
 
   tensor::Tensor t1(base::DataType::kDataTypeFp32, size, false, alloc_cu);
   ASSERT_EQ(t1.is_empty(), true);
+}
+
+TEST(test_tensor, init3) {
+  using namespace base;
+  float* ptr = new float[32];
+  ptr[0] = 31;
+  tensor::Tensor t1(base::DataType::kDataTypeFp32, 32, false, nullptr, ptr);
+  ASSERT_EQ(t1.is_empty(), false);
+  ASSERT_EQ(t1.ptr<float>(), ptr);
+  ASSERT_EQ(*t1.ptr<float>(), 31);
 }
 
 TEST(test_tensor, assign1) {

@@ -43,7 +43,7 @@ void* CUDADeviceAllocator::allocate(size_t byte_size) const {
   for (int i = 0; i < cuda_buffers.size(); i++) {
     if (cuda_buffers[i].byte_size >= byte_size && !cuda_buffers[i].busy) {
       cuda_buffers[i].busy = true;
-      no_busy_cnt_[id] -= cuda_buffers[i].byte_size;
+      no_busy_cnt_[id] -= cuda_buffers[i].byte_size;// 在申请的回收，有一块表中的显存块被申请了，空闲的数量也需要减少
       return cuda_buffers[i].data;
     }
   }
@@ -71,11 +71,11 @@ void CUDADeviceAllocator::release(void* ptr) const {
   }
   cudaError_t state = cudaSuccess;
   for (auto& it : cuda_buffers_map_) {
-    if (no_busy_cnt_[it.first] > 1024 * 1024 * 1024) {
+    if (no_busy_cnt_[it.first] > 1024 * 1024 * 1024) {// 找到要清理的cuda_buffers
       auto& cuda_buffers = it.second;
       std::vector<CudaMemoryBuffer> temp;
       for (int i = 0; i < cuda_buffers.size(); i++) {
-        if (!cuda_buffers[i].busy) {
+        if (!cuda_buffers[i].busy) {// 如果这个表项为空闲
           state = cudaSetDevice(it.first);
           state = cudaFree(cuda_buffers[i].data);
           CHECK(state == cudaSuccess)
@@ -86,7 +86,7 @@ void CUDADeviceAllocator::release(void* ptr) const {
       }
       cuda_buffers.clear();
       it.second = temp;
-      no_busy_cnt_[it.first] = 0;
+      no_busy_cnt_[it.first] = 0;// 在清理完毕之后置为0
     }
   }
 
@@ -94,7 +94,7 @@ void CUDADeviceAllocator::release(void* ptr) const {
     auto& cuda_buffers = it.second;
     for (int i = 0; i < cuda_buffers.size(); i++) {
       if (cuda_buffers[i].data == ptr) {
-        no_busy_cnt_[it.first] += cuda_buffers[i].byte_size;
+        no_busy_cnt_[it.first] += cuda_buffers[i].byte_size;// 空闲的内存大小加释放的byte_size大小
         cuda_buffers[i].busy = false;
         return;
       }

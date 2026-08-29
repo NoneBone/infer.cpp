@@ -60,6 +60,7 @@ class CUDADeviceAllocator : public DeviceAllocator {
   void release(void* ptr) const override;
 
  private:
+ // 当前空闲内存
   mutable std::map<int, size_t> no_busy_cnt_;
   mutable std::map<int, std::vector<CudaMemoryBuffer>> big_buffers_map_;
   mutable std::map<int, std::vector<CudaMemoryBuffer>> cuda_buffers_map_;
