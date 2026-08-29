@@ -1,3 +1,4 @@
+#define QWEN3_SUPPORT 1
 #ifdef QWEN3_SUPPORT
 #include "model/qwen3.h"
 #include <cuda_runtime_api.h>

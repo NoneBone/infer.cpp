@@ -1,5 +1,6 @@
 #ifndef KUIPER_INCLUDE_MODEL_LLAMA_CONFIG_H_
 #define KUIPER_INCLUDE_MODEL_LLAMA_CONFIG_H_
+#define QWEN3_SUPPORT 1
 namespace model {
 struct ModelConfig {
   int32_t dim = 0;

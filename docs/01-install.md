@@ -19,7 +19,7 @@ pip list | grep -E 'huggingface-hub|torch|transformers|tqdm|numpy'
 # huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
 #   --local-dir Qwen/Qwen3-0.6B \
 #   --local-dir-use-symlinks False
-ln -s /media/l8w/Linux118/PROJECTS/29-vllm-serials/00-COMMON/Qwen/Qwen3-0.6B  /media/l8w/Linux118/PROJECTS/04-cpp/KuiperLLama/Qwen/Qwen3-0.6B 
+ln -s /media/l8w/Linux118/PROJECTS/29-vllm-serials/00-COMMON/Qwen/Qwen3-0.6B  $(pwd)/Qwen/Qwen3-0.6B 
 ```
 
 ## 3. 导出为 pth
@@ -59,13 +59,7 @@ cmake --build build -j16
   cuda
 ```
 
-如果 CUDA 运行失败，先确认驱动可见：
-
-```shell
-nvidia-smi
-```
-
-如果 `nvidia-smi` 无法访问 NVIDIA driver，说明当前系统/容器/WSL 没有可用 GPU 驱动；修好驱动后再运行 CUDA 推理。也可以先用 CPU 做初始化和 tokenizer 冒烟测试：
+FIX: cpu 版本缺失
 
 ```shell
 ./build/demo/qwen3_infer \

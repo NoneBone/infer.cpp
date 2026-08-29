@@ -1,0 +1,50 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "debug all",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/test/test_llm",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "preLaunchTask": "base test_llm"
+    },
+    {
+      "name": "debug single",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/test/test_llm",
+      "args": [
+        "--gtest_filter=test_load.*"
+      ],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "preLaunchTask": "base test_llm"
+    },
+    {
+      "name": "debug qwen3_infer",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/demo/qwen3_infer",
+      "args": [
+        "${workspaceFolder}/tools/export_qwen3/qwen0.6.bin",
+        "${workspaceFolder}/Qwen/Qwen3-0.6B/tokenizer_config.json",
+        "cuda"
+      ],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "preLaunchTask": "build qwen3_infer"
+    }
+  ]
+}
