@@ -1,0 +1,5 @@
+Qwen/Qwen3-0.6B
+build/
+tools/
+*.pth
+*.so
