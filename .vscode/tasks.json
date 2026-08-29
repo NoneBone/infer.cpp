@@ -1,0 +1,23 @@
+{
+    "tasks": [
+        {
+            "label": "base test_unit",
+            "type": "shell",
+            "command": "cmake -S ${workspaceFolder} -B ${workspaceFolder}/build -DCMAKE_BUILD_TYPE=Debug && cmake --build ${workspaceFolder}/build --target test_unit -j",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "build qwen3_infer",
+            "type": "shell",
+            "command": "cmake -S ${workspaceFolder} -B ${workspaceFolder}/build -DUSE_CPM=ON -DQWEN3_SUPPORT=ON -DCMAKE_BUILD_TYPE=Debug && cmake --build ${workspaceFolder}/build --target qwen3_infer -j",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": "build"
+        }
+    ],
+    "version": "2.0.0"
+}
