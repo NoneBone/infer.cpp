@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(infer_cpp)
 
+# CUDA headers are required by the tensor tests (the project does not compile
+# CUDA sources as part of this target yet).
+set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda-12.8" CACHE PATH "CUDA toolkit root")
+set(CUDA_INCLUDE_DIR "${CUDA_TOOLKIT_ROOT_DIR}/targets/x86_64-linux/include")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 find_package(glog REQUIRED)
