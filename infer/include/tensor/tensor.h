@@ -46,7 +46,7 @@ public:
     size_t size() const ;
     std::shared_ptr<base::Buffer> get_buffer() const;
     int32_t get_dim(int32_t idx) const;
-
+    int32_t dims_size() const;
 
 };
 

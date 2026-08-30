@@ -130,5 +130,5 @@ int32_t Tensor::get_dim(int32_t idx) const {
   CHECK_LT(idx, this->dims_.size());
   return this->dims_.at(idx);
 }
-
+int32_t Tensor::dims_size() const{ return static_cast<int32_t>(dims_.size());};
 } // namespace tensor
