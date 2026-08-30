@@ -3,9 +3,9 @@ find_package(glog REQUIRED)
 
 set(link_ext_lib glog::glog GTest::gtest)
 aux_source_directory(../test/test_tensor DIR_TEST_TENSOR)
-add_executable(test_unit test_main.cpp ${DIR_TEST_TENSOR}) #   test_math.cpp
+add_executable(test_unit test_main.cpp ${DIR_TEST_TENSOR} ${PROJECT_SOURCE_DIR}/test/utils.cu)
 
-target_link_libraries(test_unit ${link_ext_lib})
+target_link_libraries(test_unit ${link_ext_lib} ${CUDART_LIBRARY})
 target_include_directories(test_unit PUBLIC ${glog_INCLUDE_DIR})
 target_include_directories(test_unit PUBLIC ${GTest_INCLUDE_DIR})
 

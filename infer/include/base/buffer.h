@@ -19,6 +19,13 @@ public:
 
     void* ptr();
     const void* ptr() const;
+
+    void set_device_type(DeviceType device_type);
+    bool is_external() const;
+
+    void copy_from(const Buffer& buffer) const;// 必须传入一个 Buffer 对象,const 表示只能读取a的成员，不能修改
+    void copy_from(const Buffer* buffer) const;// 传入的地址，可以是nullptr
+    DeviceType device_type() const;
 };
 }
 #endif
