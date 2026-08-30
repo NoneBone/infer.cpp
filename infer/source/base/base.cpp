@@ -3,7 +3,5 @@
 #include <string>
 
 namespace base{
-
-
     
 }// namespace base

@@ -17,6 +17,26 @@ enum class DataType : uint8_t {
   kDataTypeInt8 = 2,
   kDataTypeInt32 = 3,
 };
+
+enum class MemcpyKind{
+    kMemcpyCPU2CPU = 0,
+    kMemcpyCPU2CUDA = 1,
+    kMemcpyCUDA2CPU = 2,
+    kMemcpyCUDACUDA = 3,
+};
+
+inline size_t DataTypeSize(DataType data_type) {
+  if (data_type == DataType::kDataTypeFp32) {
+    return sizeof(float);
+  } else if (data_type == DataType::kDataTypeInt8) {
+    return sizeof(int8_t);
+  } else if (data_type == DataType::kDataTypeInt32) {
+    return sizeof(int32_t);
+  } else {
+    return 0;
+  }
+}
+
 class NoCopyable {
  protected:
   NoCopyable() = default;

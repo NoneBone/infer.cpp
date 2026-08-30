@@ -1,5 +1,3 @@
-#include <glog/logging.h>
-#include <cstdlib>
 #include "base/alloc.h"
 
 namespace base{

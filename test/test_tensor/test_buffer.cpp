@@ -68,8 +68,8 @@ TEST(test_buffer, mem_set_kernel){
   int bytes_size = 32 * sizeof(float);
   Buffer buffer1(bytes_size, alloc_cu);
   Buffer buffer2(bytes_size, alloc_cu);
-  ASSERT_EQ(buffer1.device_type(), DeviceType::kDeviceCUDA);
-  ASSERT_EQ(buffer2.device_type(), DeviceType::kDeviceCUDA);
+  ASSERT_EQ(buffer1.get_device_type(), DeviceType::kDeviceCUDA);
+  ASSERT_EQ(buffer2.get_device_type(), DeviceType::kDeviceCUDA);
   // set
   set_value_cu((float*) buffer1.ptr(), size, 1.0f);
   buffer2.copy_from(buffer1);

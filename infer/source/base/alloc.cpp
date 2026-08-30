@@ -2,6 +2,7 @@
 #include "base/alloc.h"
 
 namespace base{
+// 统一的拷贝接口, 对于 cpu 和 cuda
 void DeviceAllocator::memcpy(const void *src_ptr, void *dst_ptr, size_t byte_size,
                     MemcpyKind memcpy_kind, void *stream, bool need_sync) const {
     CHECK_NE(src_ptr, nullptr);

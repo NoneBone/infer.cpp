@@ -5,17 +5,11 @@
 #include "memory"
 #include "map"
 namespace base{
-enum class MemcpyKind{
-    kMemcpyCPU2CPU = 0,
-    kMemcpyCPU2CUDA = 1,
-    kMemcpyCUDA2CPU = 2,
-    kMemcpyCUDACUDA = 3,
-};
 
 class DeviceAllocator
 {
 public:
-    explicit DeviceAllocator(DeviceType device_type) : device_type_(device_type){} //ISSUE
+    explicit DeviceAllocator(DeviceType device_type) : device_type_(device_type){}
 
     virtual DeviceType device_type() const{
         return device_type_;
@@ -45,8 +39,6 @@ public:
 
     void* allocate(size_t byte_size) const override;
     void release(void* ptr) const override;
-private:
-    int not_busy =0;
 };
 // factory entry
 class CPUDeviceAllocatorFactory{
