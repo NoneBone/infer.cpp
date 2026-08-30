@@ -37,6 +37,10 @@ public:
     bool is_empty() const;
     base::DeviceType device_type() const;
     size_t byte_size() const;
+    size_t size() const ;
+    std::shared_ptr<base::Buffer> get_buffer() const;
+
+
 };
 
 // 模板函数的调用，源文件include的内容必须得看到完整实现，故不适合放在 tensor.cpp中

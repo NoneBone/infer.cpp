@@ -21,6 +21,11 @@ aux_source_directory(infer/source/model/ DIR_MODEL)
 aux_source_directory(infer/source/op/kernels DIR_KERNEL)
 aux_source_directory(infer/source/sampler DIR_SAMPLE)
 
+file(GLOB_RECURSE DIR_KERNEL
+    "${PROJECT_SOURCE_DIR}/infer/source/op/kernels/*.cpp"
+    "${PROJECT_SOURCE_DIR}/infer/source/op/kernels/*.cu"
+)
+
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 find_package(GTest REQUIRED)
 set(QWEN_SOURCES ${DIR_TENSOR} ${DIR_BASE} ${DIR_OP} ${DIR_MODEL} ${DIR_KERNEL} ${DIR_SAMPLE})

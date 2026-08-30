@@ -4,6 +4,13 @@
 #include <cstring>
 #include <string>
 
+#define UNUSED(expr) \
+  do {               \
+    (void)(expr);    \
+  } while (0)
+
+#define CEIL(a,b) ((a+b-1)/b)
+
 namespace base{
 enum class DeviceType: uint8_t{
     kDeviceUnknown = 0,

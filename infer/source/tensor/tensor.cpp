@@ -121,5 +121,8 @@ base::DeviceType Tensor::device_type() const{
 };
 
 size_t Tensor::byte_size() const { return this->size_ * DataTypeSize(data_type_); }
+size_t Tensor::size() const{ return this->size_; };
+
+std::shared_ptr<base::Buffer> Tensor::get_buffer() const{ return buffer_; };
 
 } // namespace tensor

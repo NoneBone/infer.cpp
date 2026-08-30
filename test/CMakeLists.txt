@@ -2,8 +2,15 @@ find_package(GTest REQUIRED)
 find_package(glog REQUIRED)
 
 set(link_ext_lib glog::glog GTest::gtest)
-aux_source_directory(../test/test_tensor DIR_TEST_TENSOR)
-add_executable(test_unit test_main.cpp ${DIR_TEST_TENSOR} ${PROJECT_SOURCE_DIR}/test/utils.cu)
+file(GLOB_RECURSE DIR_TESTS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_tensor/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_op/*.cpp"
+)
+add_executable(test_unit
+    test_main.cpp
+    ${DIR_TESTS}
+    ${PROJECT_SOURCE_DIR}/test/utils.cu
+)
 
 target_link_libraries(test_unit ${link_ext_lib} ${CUDART_LIBRARY})
 target_include_directories(test_unit PUBLIC ${glog_INCLUDE_DIR})
