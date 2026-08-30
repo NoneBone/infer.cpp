@@ -99,16 +99,16 @@ RoPEKernel get_rope_kernel(base::DeviceType device_type) {
 //   }
 // }
 
-// SwigluKernel get_swiglu_kernel(base::DeviceType device_type, void* stream) {
-//   if (device_type == base::DeviceType::kDeviceCPU) {
-//     return swiglu_kernel_cpu;
-//   } else if (device_type == base::DeviceType::kDeviceCUDA) {
-//     return swiglu_kernel_cu;
-//   } else {
-//     LOG(FATAL) << "Unknown device type for get a swiglu kernel.";
-//     return nullptr;
-//   }
-// }
+SwigluKernel get_swiglu_kernel(base::DeviceType device_type, void* stream) {
+  if (device_type == base::DeviceType::kDeviceCPU) {
+    return swiglu_kernel_cpu;
+  } else if (device_type == base::DeviceType::kDeviceCUDA) {
+    return swiglu_kernel_cu;
+  } else {
+    LOG(FATAL) << "Unknown device type for get a swiglu kernel.";
+    return nullptr;
+  }
+}
 
 RMSNormKernel get_rmsnorm_kernel(base::DeviceType device_type) {
   if (device_type == base::DeviceType::kDeviceCPU) {
