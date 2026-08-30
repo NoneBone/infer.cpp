@@ -110,16 +110,16 @@ RoPEKernel get_rope_kernel(base::DeviceType device_type) {
 //   }
 // }
 
-// RMSNormKernel get_rmsnorm_kernel(base::DeviceType device_type) {
-//   if (device_type == base::DeviceType::kDeviceCPU) {
-//     return rmsnorm_kernel_cpu;
-//   } else if (device_type == base::DeviceType::kDeviceCUDA) {
-//     return rmsnorm_kernel_cu;
-//   } else {
-//     LOG(FATAL) << "Unknown device type for get a rmsnorm kernel.";
-//     return nullptr;
-//   }
-// }
+RMSNormKernel get_rmsnorm_kernel(base::DeviceType device_type) {
+  if (device_type == base::DeviceType::kDeviceCPU) {
+    return rmsnorm_kernel_cpu;
+  } else if (device_type == base::DeviceType::kDeviceCUDA) {
+    return rmsnorm_kernel_cu;
+  } else {
+    LOG(FATAL) << "Unknown device type for get a rmsnorm kernel.";
+    return nullptr;
+  }
+}
 
 // RMSNormKernelDim get_rmsnorm_dim_kernel(base::DeviceType device_type) {
 //   if (device_type == base::DeviceType::kDeviceCUDA) {
