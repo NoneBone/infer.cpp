@@ -32,6 +32,12 @@ public:
     T* ptr();
     template <typename T>
     const T* ptr() const;
+    template <typename T>
+    const T* ptr(int64_t index) const;
+    template <typename T>
+    T& index(int64_t idx);
+    template <typename T>
+    const T& index(int64_t idx) const;
 
     // easy
     bool is_empty() const;
@@ -39,6 +45,7 @@ public:
     size_t byte_size() const;
     size_t size() const ;
     std::shared_ptr<base::Buffer> get_buffer() const;
+    int32_t get_dim(int32_t idx) const;
 
 
 };
@@ -61,5 +68,27 @@ const T* Tensor::ptr() const {
     return const_cast<const T*>(reinterpret_cast<T*>(buffer_->ptr()));// const_cast 主要用于移除或添加 const 属性
 };
 
+template <typename T>
+const T* Tensor::ptr(int64_t index) const {
+  CHECK(buffer_ != nullptr && buffer_->ptr() != nullptr)
+      << "The data area buffer of this tensor is empty or it points to a null pointer.";
+  return reinterpret_cast<const T*>(buffer_->ptr()) + index;
+}
+
+template <typename T>
+T& Tensor::index(int64_t offset) {
+  CHECK_GE(offset, 0);
+  CHECK_LT(offset, this->size());
+  T& val = *(reinterpret_cast<T*>(buffer_->ptr()) + offset);
+  return val;
+}
+
+template <typename T>
+const T& Tensor::index(int64_t offset) const {
+  CHECK_GE(offset, 0);
+  CHECK_LT(offset, this->size());
+  const T& val = *(reinterpret_cast<T*>(buffer_->ptr()) + offset);
+  return val;
+}
 }
 #endif
