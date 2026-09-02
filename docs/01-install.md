@@ -14,11 +14,13 @@ pip list | grep -E 'huggingface-hub|torch|transformers|tqdm|numpy'
 模型会下载到当前目录下的 `Qwen/Qwen3-0.6B`：
 
 ```shell
-# export HF_ENDPOINT=https://hf-mirror.com
-# /home/l8w/miniconda3/envs/cp312/bin/python -m pip install huggingface-cli
-# huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
-#   --local-dir Qwen/Qwen3-0.6B \
-#   --local-dir-use-symlinks False
+# 法1
+export HF_ENDPOINT=https://hf-mirror.com
+
+hf download Qwen/Qwen3-0.6B \
+  --local-dir Qwen/Qwen3-0.6B
+
+# 法 2
 ln -s /media/l8w/Linux118/PROJECTS/29-vllm-serials/00-COMMON/Qwen/Qwen3-0.6B  $(pwd)/Qwen/Qwen3-0.6B 
 ```
 
