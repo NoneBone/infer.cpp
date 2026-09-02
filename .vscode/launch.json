@@ -20,7 +20,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/test/test_llm",
       "args": [
-        "--gtest_filter=test_flux_text.*"
+        "--gtest_filter=test_flux_layers.*"
       ],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,

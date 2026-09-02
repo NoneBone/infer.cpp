@@ -33,18 +33,18 @@ LLM 到 diffusion 模型的推理框架迁移，工程量较为庞大，这需�
 
 ### 1. 目标与边界
 
-v1 先建立一条可复现、可调试、可回归的 FP16 单图推理链路：
+v1 先建立一条可复现、可调试、可回归的 BF16 单图推理链路：
 
 `safetensors/HuggingFace 权重 → 权重适配层 → CLIP/T5 → FLUX Transformer → VAE 解码 → 图片`
 
-固定模型为 `black-forest-labs/FLUX.1-dev`，batch=1、单图输入和 FP16 主路径；先建立 PyTorch/diffusers 参考基线，再迁移到本仓库 C++/CUDA 后端。量化、批处理、动态 shape、LoRA、ControlNet、多卡和极致性能优化不纳入 v1。
+固定模型为 `black-forest-labs/FLUX.1-dev`，batch=1、单图输入和 BF16 主路径；先建立 PyTorch/diffusers 参考基线，再迁移到本仓库 C++/CUDA 后端。量化、批处理、动态 shape、LoRA、ControlNet、多卡和极致性能优化不纳入 v1。
 
 ### 2. 详尽的差异分析（补充）
 
 1. **模型拓扑**：Qwen 是自回归 LLM；FLUX 是 latent diffusion Transformer，包含双流/单流 block、时间步与 guidance、RoPE、AdaLN、联合 attention 和多步 scheduler。
 2. **输入输出**：LLM 输入 `input_ids`、输出 logits；FLUX 接收 prompt、随机 latent、尺寸、seed 和 guidance，输出 latent，再经 VAE 生成 RGB。
 3. **权重组织**：HF 缓存包含分片 safetensors 及 `model_index.json`、tokenizer、scheduler、text encoder、transformer、vae 等组件，必须按组件和 key 映射。
-4. **数值与布局**：统一 FP16/BF16/FP32 边界、NCHW/NHWC、`[B,S,H]` 与 `[S,B,H]`、latent/VAE scaling、RoPE 频率及 timestep/σ 定义。
+4. **数值与布局**：统一 BF16/FP32 边界、NCHW/NHWC、`[B,S,H]` 与 `[S,B,H]`、latent/VAE scaling、RoPE 频率及 timestep/σ 定义。
 5. **依赖与版本**：diffusers/transformers 仅作参考基线或权重解析工具；记录模型版本、权重 SHA256、依赖版本和许可证。
 
 产物包括组件拓扑图、输入输出 tensor contract、HF key 映射表、算子清单、dtype/shape 表及风险清单。
@@ -75,11 +75,11 @@ ev
 
 #### 阶段 1：权重读取与 tensor 基础设施
 
-实现 safetensors 单文件/分片读取、索引解析、按 key 加载及 CPU/GPU 拷贝；建立 `WeightMap` 校验 key、shape、dtype、有限值。扩展 `test_tensor` 覆盖 FP16 转换、broadcast、reshape、transpose、concat/split、matmul、随机种子和设备拷贝；先完成各组件完整权重加载测试。
+实现 safetensors 单文件/分片读取、索引解析、按 key 加载及 CPU/GPU 拷贝；建立 `WeightMap` 校验 key、shape、dtype、有限值。扩展 `test_tensor` 覆盖 BF16 张量、broadcast、reshape、transpose、concat/split、matmul、随机种子和设备拷贝；先完成各组件完整权重加载测试。
 
 #### 阶段 2：CLIP/T5 文本编码器
 
-严格复现 tokenizer 的 padding、EOS、attention mask、position ids 和最大长度。实现 embedding、LayerNorm/RMSNorm、attention、MLP、残差和最终投影；先 reference 对齐，再实现 FP16 CUDA kernel。固化输出 shape、dtype、scale、device contract，并保存每层 hidden state。
+严格复现 tokenizer 的 padding、EOS、attention mask、position ids 和最大长度。实现 embedding、LayerNorm/RMSNorm、attention、MLP、残差和最终投影；先 reference 对齐，再实现 BF16 CUDA kernel。固化输出 shape、dtype、scale、device contract，并保存每层 hidden state。
 
 #### 阶段 3：FLUX Transformer
 
@@ -97,7 +97,7 @@ ev
 
 测试分四级：Tensor 级（输出、shape、stride、dtype、NaN/Inf）；算子级（随机输入与 PyTorch/reference 对比）；组件级（CLIP、T5、Transformer、VAE 关键层）；端到端级（固定 seed 的初始 latent、每步 latent 及最终图像）。
 
-报告 `max_abs_error`、`mean_abs_error`，必要时报告相对误差、cosine similarity 和 RGB 像素误差。FP32/reference 目标为 `max_abs_error < 1e-4`；FP16 先以组件级 `1e-3` 作为诊断门槛，再依据官方 FP16 基线确定端到端阈值。放宽阈值必须记录原因和影响范围。
+报告 `max_abs_error`、`mean_abs_error`，必要时报告相对误差、cosine similarity 和 RGB 像素误差。FP32/reference 目标为 `max_abs_error < 1e-4`；BF16 先以组件级 `1e-3` 作为诊断门槛，再依据官方 BF16 基线确定端到端阈值。放宽阈值必须记录原因和影响范围。
 
 ### 6. 里程碑与完成定义
 

@@ -76,6 +76,13 @@ def dump_golden(args: argparse.Namespace, model_dir: Path, output_dir: Path) -> 
     save_tensor(output_dir / "clip_input_ids.pt", clip_tokens)
     save_tensor(output_dir / "t5_input_ids.pt", t5_tokens)
     with torch.inference_mode():
+        # 编码器首层 hidden state 是 C++ 文本 block 的真实逐元素对齐基准。
+        clip_states = pipe.text_encoder(clip_tokens.to(device), output_hidden_states=True).hidden_states
+        t5_states = pipe.text_encoder_2(t5_tokens.to(device), output_hidden_states=True).hidden_states
+        save_tensor(output_dir / "clip_block_00_input.pt", clip_states[0])
+        save_tensor(output_dir / "clip_block_00_output.pt", clip_states[1])
+        save_tensor(output_dir / "t5_block_00_input.pt", t5_states[0])
+        save_tensor(output_dir / "t5_block_00_output.pt", t5_states[1])
         prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(
             prompt=args.prompt, prompt_2=args.prompt, device=device, num_images_per_prompt=1,
             max_sequence_length=args.max_sequence_length)
