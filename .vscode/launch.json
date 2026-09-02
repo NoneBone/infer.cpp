@@ -20,7 +20,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/test/test_llm",
       "args": [
-        "--gtest_filter=test_load.*"
+        "--gtest_filter=test_flux_text.*"
       ],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,
@@ -36,7 +36,7 @@
       "program": "${workspaceFolder}/build/demo/qwen3_infer",
       "args": [
         "${workspaceFolder}/tools/export_qwen3/qwen0.6.bin",
-        "${workspaceFolder}/Qwen/Qwen3-0.6B/tokenizer_config.json",
+        "${workspaceFolder}/model/Qwen/Qwen3-0.6B/tokenizer_config.json",
         "cuda"
       ],
       "cwd": "${workspaceFolder}",
