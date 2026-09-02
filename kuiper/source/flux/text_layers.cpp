@@ -6,6 +6,7 @@
 namespace flux {
 void linear_cuda(const tensor::Tensor& input, const tensor::Tensor& weight,
                  const tensor::Tensor* bias, tensor::Tensor& output);
+void t5_encoder_block_cuda(const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, const tensor::Tensor&, int32_t, tensor::Tensor&, const tensor::Tensor*);
 void self_attention_cuda(const tensor::Tensor& input, const tensor::Tensor& q_weight,
                          const tensor::Tensor& k_weight, const tensor::Tensor& v_weight,
                          const tensor::Tensor& o_weight, int32_t head_count, bool causal,
@@ -184,6 +185,45 @@ base::Status clip_mlp(const tensor::Tensor& in, const tensor::Tensor& w1, const 
   s = quick_gelu(hidden, hidden);
   if (!s) return s;
   return linear(hidden, w2, &b2, out);
+}
+base::Status t5_encoder_block(const tensor::Tensor& input, const tensor::Tensor& norm1_weight,
+                              const tensor::Tensor& q_weight, const tensor::Tensor& k_weight,
+                              const tensor::Tensor& v_weight, const tensor::Tensor& o_weight,
+                              const tensor::Tensor& relative_attention_bias,
+                              const tensor::Tensor& norm2_weight, const tensor::Tensor& wi0_weight,
+                              const tensor::Tensor& wi1_weight, const tensor::Tensor& wo_weight,
+                              int32_t head_count, tensor::Tensor& output, const tensor::Tensor* attention_mask) {
+  if (!bf16(input) || !bf16(output) || input.dims() != output.dims() || head_count <= 0 || input.get_dim(1) % head_count)
+    return base::error::InvalidArgument("invalid T5 block tensors");
+  if (input.device_type() == base::DeviceType::kDeviceCUDA) {
+    t5_encoder_block_cuda(input, norm1_weight, q_weight, k_weight, v_weight, o_weight, relative_attention_bias, norm2_weight, wi0_weight, wi1_weight, wo_weight, head_count, output, attention_mask);
+    return base::error::Success();
+  }
+  if (input.device_type() != base::DeviceType::kDeviceCPU) return base::error::InvalidArgument("unsupported T5 block device");
+  const int seq = input.get_dim(0), hidden = input.get_dim(1), head_dim = hidden / head_count;
+  auto norm1 = temp(input.dims()), q = temp(input.dims()), k = temp(input.dims()), v = temp(input.dims());
+  auto context = temp(input.dims()), attention = temp(input.dims()), residual1 = temp(input.dims());
+  auto norm2 = temp(input.dims()), mlp = temp(input.dims());
+  auto status = rms_norm(input, norm1_weight, norm1, 1e-6f); if (!status) return status;
+  status = linear(norm1, q_weight, nullptr, q); if (!status) return status;
+  status = linear(norm1, k_weight, nullptr, k); if (!status) return status;
+  status = linear(norm1, v_weight, nullptr, v); if (!status) return status;
+  auto bias = temp({head_count, seq, seq});
+  status = t5_relative_position_bias(relative_attention_bias, seq, true, bias); if (!status) return status;
+  // T5 uses mesh-initialized Q/K and deliberately does not apply 1/sqrt(head_dim) here.
+  for (int h = 0; h < head_count; ++h) for (int row = 0; row < seq; ++row) {
+    std::vector<float> score(seq); float maximum = -INFINITY;
+    for (int col = 0; col < seq; ++col) { float dot = 0.f;
+      for (int d = 0; d < head_dim; ++d) dot += bf16_to_float(q.ptr<uint16_t>()[row*hidden+h*head_dim+d]) * bf16_to_float(k.ptr<uint16_t>()[col*hidden+h*head_dim+d]);
+      score[col] = dot + bf16_to_float(bias.ptr<uint16_t>()[h*seq*seq+row*seq+col]); maximum = std::max(maximum, score[col]); }
+    float denom = 0.f; for (float& item : score) { item = std::exp(item-maximum); denom += item; }
+    for (int d = 0; d < head_dim; ++d) { float value = 0.f; for (int col = 0; col < seq; ++col) value += score[col]/denom * bf16_to_float(v.ptr<uint16_t>()[col*hidden+h*head_dim+d]); context.ptr<uint16_t>()[row*hidden+h*head_dim+d] = float_to_bf16(value); }
+  }
+  status = linear(context, o_weight, nullptr, attention); if (!status) return status;
+  status = residual_add(input, attention, residual1); if (!status) return status;
+  status = rms_norm(residual1, norm2_weight, norm2, 1e-6f); if (!status) return status;
+  status = t5_gated_mlp(norm2, wi0_weight, wi1_weight, wo_weight, mlp); if (!status) return status;
+  return residual_add(residual1, mlp, output);
 }
 base::Status t5_gated_mlp(const tensor::Tensor& in, const tensor::Tensor& w0,
                           const tensor::Tensor& w1, const tensor::Tensor& wo, tensor::Tensor& out) {

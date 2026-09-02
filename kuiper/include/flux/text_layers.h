@@ -31,6 +31,13 @@ base::Status clip_encoder_block(const tensor::Tensor& input, const tensor::Tenso
 base::Status clip_mlp(const tensor::Tensor& input, const tensor::Tensor& fc1_weight,
                       const tensor::Tensor& fc1_bias, const tensor::Tensor& fc2_weight,
                       const tensor::Tensor& fc2_bias, tensor::Tensor& output);
+base::Status t5_encoder_block(const tensor::Tensor& input, const tensor::Tensor& norm1_weight,
+                              const tensor::Tensor& q_weight, const tensor::Tensor& k_weight,
+                              const tensor::Tensor& v_weight, const tensor::Tensor& o_weight,
+                              const tensor::Tensor& relative_attention_bias,
+                              const tensor::Tensor& norm2_weight, const tensor::Tensor& wi0_weight,
+                              const tensor::Tensor& wi1_weight, const tensor::Tensor& wo_weight,
+                              int32_t head_count, tensor::Tensor& output, const tensor::Tensor* attention_mask = nullptr);
 base::Status t5_gated_mlp(const tensor::Tensor& input, const tensor::Tensor& wi0_weight,
                           const tensor::Tensor& wi1_weight, const tensor::Tensor& wo_weight,
                           tensor::Tensor& output);

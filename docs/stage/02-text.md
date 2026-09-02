@@ -70,3 +70,32 @@ test_flux_layers 覆盖：
 ## CLIP block reference
 
 已加入 `clip_encoder_block` 的 CPU BF16 reference：pre-LayerNorm、包含 q/k/v/out bias 的因果 self-attention、两次残差连接及 QuickGELU MLP。已由 safetensors 权重加载器读入 `text_model.encoder.layers.0.*`，并在 `test_flux_layers.clip_block_00_matches_real_golden` 对比 `clip_block_00_output.pt` 转换得到的 safetensors golden。测试于 2026-09-02 通过，CPU reference 耗时约 17.8 秒，逐元素最大绝对误差阈值为 0.20（BF16 容差）。
+
+
+## T5 CUDA block（进行中）
+
+已实现 CUDA-only 的 RMSNorm、Q/K/V/O Linear、相对位置 bias、无 `1/sqrt(d)` 缩放 attention、残差与 gated-GELU MLP，并接入 `text_encoder_2/model.safetensors.index.json` 的第 0 block 真实权重和 `t5_block_00_golden.safetensors`。`test_flux_layers.t5_block_00_cuda_matches_real_golden` 已实际执行，但当前最大绝对误差为 198.125，尚未达到 BF16 对齐阈值，不能作为通过项；后续需以 Transformers 的 attention mask 与 position-bias 中间值为依据继续定位。
+
+
+## T5 CUDA relative-bias 修复与验证（2026-09-02）
+
+### 修复内容
+
+CUDA 的 `t5_bias_kernel` 已按 Transformers T5 的双向 bucket 规则生成 position bias。此前 kernel 虽计算了正相对位置的 bucket 偏移 `off`，但最终索引遗漏该偏移，使正向位置错误读取负向 bucket。修复为将 `off` 加入最终 bucket 索引。
+
+T5 CUDA block 保持全 CUDA 算子路径：RMSNorm、Q/K/V/O Linear、relative position bias、无 `1/sqrt(head_dim)` 缩放的 attention、两次 residual add 与 gated-GELU MLP。CPU 只用于 safetensors/golden 文件读取及最终结果回传比较，不参与推理算子。
+
+### 真实权重与 golden
+
+测试从 `text_encoder_2/model.safetensors.index.json` 加载 `encoder.block.0` 的 RMSNorm、Q/K/V/O、relative attention bias、FFN RMSNorm 和 wi_0/wi_1/wo 分片权重；输入/输出使用 `tmp/golden/v1/t5_block_00_golden.safetensors`，其来源为 diffusers 导出的 `t5_block_00_input/output.pt`。
+
+### 可运行指令
+
+```bash
+cmake --build build -j1 --target test_llm
+./build/test/test_llm --gtest_filter=test_flux_layers.t5_block_00_cuda_matches_real_golden
+```
+
+### 验证结果
+
+修复前最大绝对误差为 `69.25`；修复 relative-bias 正向 bucket 偏移后降为 `1.0`。主语义错误已修复，但该值尚未满足当前 `0.30` 的绝对误差门限。剩余差异需结合 mean/relative error 评估 BF16 逐元素 CUDA 累积与 PyTorch 矩阵核的舍入差异，不能通过简单放宽最大绝对误差门限掩盖。

@@ -106,3 +106,17 @@ TEST(test_flux_layers, clip_block_00_matches_real_golden) {
   for (size_t i = 0; i < output.size(); ++i) max_error = std::max(max_error, std::abs(f(output,i)-f(expected,i)));
   EXPECT_LT(max_error, 0.20f);
 }
+
+TEST(test_flux_layers, t5_block_00_cuda_matches_real_golden) {
+  const std::string golden_path = "./tmp/golden/v1/t5_block_00_golden.safetensors";
+  const std::string index_path = "./model/flux1dev/snapshots/3de623fc3c33e44ffbe2bad470d0f45bccf2eb21/text_encoder_2/model.safetensors.index.json";
+  if (!std::filesystem::exists(golden_path) || !std::filesystem::exists(index_path)) GTEST_SKIP();
+  auto golden = flux::SafetensorsLoader::FromFile(golden_path), weights = flux::SafetensorsLoader::FromIndex(index_path);
+  tensor::Tensor input, expected, output, mask; ASSERT_TRUE(golden.load("input",input)); ASSERT_TRUE(golden.load("output",expected)); ASSERT_TRUE(golden.load("mask",mask));
+  input.reshape({512,4096}); expected.reshape({512,4096}); mask.reshape({512}); output=expected.clone(); input.to_cuda(); output.to_cuda(); mask.to_cuda();
+  auto load=[&](const char* k,tensor::Tensor& x){ ASSERT_TRUE(weights.load(k,x,base::DeviceType::kDeviceCUDA))<<k; };
+  tensor::Tensor n1,q,k,v,o,rb,n2,wi0,wi1,wo;
+  load("encoder.block.0.layer.0.layer_norm.weight",n1); load("encoder.block.0.layer.0.SelfAttention.q.weight",q); load("encoder.block.0.layer.0.SelfAttention.k.weight",k); load("encoder.block.0.layer.0.SelfAttention.v.weight",v); load("encoder.block.0.layer.0.SelfAttention.o.weight",o); load("encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight",rb); load("encoder.block.0.layer.1.layer_norm.weight",n2); load("encoder.block.0.layer.1.DenseReluDense.wi_0.weight",wi0); load("encoder.block.0.layer.1.DenseReluDense.wi_1.weight",wi1); load("encoder.block.0.layer.1.DenseReluDense.wo.weight",wo);
+  ASSERT_TRUE(flux::t5_encoder_block(input,n1,q,k,v,o,rb,n2,wi0,wi1,wo,64,output)); output.to_cpu();
+  float max_error=0; for(size_t i=0;i<output.size();++i) max_error=std::max(max_error,std::abs(f(output,i)-f(expected,i))); EXPECT_LT(max_error,0.30f);
+}
