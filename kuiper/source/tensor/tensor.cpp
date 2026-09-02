@@ -19,6 +19,9 @@ static size_t data_type_size(base::DataType data_type) {
     case base::DataType::kDataTypeFp32: {
       return 4;
     }
+    case base::DataType::kDataTypeBf16: {
+      return 2;
+    }
     case base::DataType::kDataTypeInt8: {
       return 1;
     }

@@ -42,8 +42,9 @@ enum class DeviceType : uint8_t {
 enum class DataType : uint8_t {
   kDataTypeUnknown = 0,
   kDataTypeFp32 = 1,
-  kDataTypeInt8 = 2,
-  kDataTypeInt32 = 3,
+  kDataTypeBf16 = 2,
+  kDataTypeInt8 = 3,
+  kDataTypeInt32 = 4,
 };
 
 enum class ModelType : uint8_t {
@@ -54,6 +55,8 @@ enum class ModelType : uint8_t {
 inline size_t DataTypeSize(DataType data_type) {
   if (data_type == DataType::kDataTypeFp32) {
     return sizeof(float);
+  } else if (data_type == DataType::kDataTypeBf16) {
+    return sizeof(uint16_t);
   } else if (data_type == DataType::kDataTypeInt8) {
     return sizeof(int8_t);
   } else if (data_type == DataType::kDataTypeInt32) {
