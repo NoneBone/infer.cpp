@@ -70,16 +70,16 @@ RoPEKernel get_rope_kernel(base::DeviceType device_type) {
   }
 }
 
-// MHAKernel get_mha_kernel(base::DeviceType device_type) {
-//   if (device_type == base::DeviceType::kDeviceCPU) {
-//     return mha_kernel;
-//   } else if (device_type == base::DeviceType::kDeviceCUDA) {
-//     return mha_kernel_cu;
-//   } else {
-//     LOG(FATAL) << "Unknown device type for get an mha kernel.";
-//     return nullptr;
-//   }
-// }
+MHAKernel get_mha_kernel(base::DeviceType device_type) {
+  if (device_type == base::DeviceType::kDeviceCPU) {
+    return mha_kernel;
+  } else if (device_type == base::DeviceType::kDeviceCUDA) {
+    return mha_kernel_cu;
+  } else {
+    LOG(FATAL) << "Unknown device type for get an mha kernel.";
+    return nullptr;
+  }
+}
 
 // ScaleKernel get_scale_kernel(base::DeviceType device_type) {
 //   if (device_type == base::DeviceType::kDeviceCPU) {
@@ -130,13 +130,15 @@ RMSNormKernel get_rmsnorm_kernel(base::DeviceType device_type) {
 //   }
 // }
 
-// ScaleSumKernel get_scale_sum_kernel(base::DeviceType device_type) {
-//   if (device_type == base::DeviceType::kDeviceCPU) {
-//     return scale_sum_kernel_cpu;
-//   } else {
-//     LOG(FATAL) << "Unknown device type for get a scale and reduce kernel.";
-//     return nullptr;
-//   }
-// }
+ScaleSumKernel get_scale_sum_kernel(base::DeviceType device_type) {
+  if (device_type == base::DeviceType::kDeviceCPU) {
+    return scale_sum_kernel_cpu;
+  } else if (device_type == base::DeviceType::kDeviceCUDA) {
+    return scale_sum_kernel_cu;
+  } else {
+    LOG(FATAL) << "Unknown device type for get a scale and reduce kernel.";
+    return nullptr;
+  }
+}
 
 } // namespace kernel
