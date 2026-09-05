@@ -5,6 +5,7 @@ set(link_ext_lib glog::glog GTest::gtest)
 file(GLOB_RECURSE DIR_TESTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/test_tensor/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_op/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_model/*.cpp"
 )
 add_executable(test_unit
     test_main.cpp

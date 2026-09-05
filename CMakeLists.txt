@@ -14,12 +14,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 find_package(glog REQUIRED)
 find_package(Armadillo REQUIRED)
 
-aux_source_directory(infer/source/tensor/ DIR_TENSOR)
 aux_source_directory(infer/source/base/ DIR_BASE)
-aux_source_directory(infer/source/op/ DIR_OP)
 aux_source_directory(infer/source/model/ DIR_MODEL)
+aux_source_directory(infer/source/op/ DIR_OP)
 aux_source_directory(infer/source/op/kernels DIR_KERNEL)
+aux_source_directory(infer/source/tensor/ DIR_TENSOR)
 aux_source_directory(infer/source/sampler DIR_SAMPLE)
+
 
 file(GLOB_RECURSE DIR_KERNEL
     "${PROJECT_SOURCE_DIR}/infer/source/op/kernels/*.cpp"

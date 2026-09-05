@@ -19,6 +19,8 @@ public:
                     std::shared_ptr<base::DeviceAllocator> allocator = nullptr, void* ptr = nullptr); 
     explicit Tensor(base::DataType data_type, int32_t dim0, int32_t dim1, bool need_alloc = false,
                     std::shared_ptr<base::DeviceAllocator> allocator = nullptr, void* ptr = nullptr); 
+    explicit Tensor(base::DataType data_type, std::vector<int32_t> dims, bool need_alloc = false,
+                  std::shared_ptr<base::DeviceAllocator> alloc = nullptr, void* ptr = nullptr);
     bool allocate_now(std::shared_ptr<base::DeviceAllocator> allocator, bool need_alloc = false);
     void init_buffer(std::shared_ptr<base::DeviceAllocator> alloc, base::DataType data_type,
                                                                 bool need_alloc, void* ptr);
@@ -47,6 +49,8 @@ public:
     std::shared_ptr<base::Buffer> get_buffer() const;
     int32_t get_dim(int32_t idx) const;
     int32_t dims_size() const;
+    base::DataType data_type() const;
+    void set_device_type(base::DeviceType device_type) const;
 
 };
 

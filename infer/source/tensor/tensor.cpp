@@ -1,4 +1,5 @@
 #include "tensor/tensor.h"
+#include <numeric> // accumulate
 
 namespace tensor
 {
@@ -31,6 +32,26 @@ Tensor::Tensor(base::DataType data_type, int32_t dim0, int32_t dim1, bool need_a
         init_buffer(allocator, data_type, need_alloc, ptr);
     }
 };
+
+template <typename T, typename Tp>
+static size_t reduce_dimension(T begin, T end, Tp init) {
+  if (begin >= end) {
+    return 0;
+  }
+  size_t size = std::accumulate(begin, end, init, std::multiplies<>());
+  return size;
+}
+
+Tensor::Tensor(base::DataType data_type, std::vector<int32_t> dims, bool need_alloc,
+               std::shared_ptr<base::DeviceAllocator> alloc, void* ptr)
+    : dims_(std::move(dims)), data_type_(data_type) {
+  size_ = reduce_dimension(dims_.begin(), dims_.end(), 1);
+  if (need_alloc && alloc) {
+    allocate_now(alloc);
+  } else {
+    init_buffer(alloc, data_type_, need_alloc, ptr);
+  }
+}
 
 bool Tensor::allocate_now(std::shared_ptr<base::DeviceAllocator> allocator, bool need_alloc){
     if(!allocator){
@@ -131,4 +152,11 @@ int32_t Tensor::get_dim(int32_t idx) const {
   return this->dims_.at(idx);
 }
 int32_t Tensor::dims_size() const{ return static_cast<int32_t>(dims_.size());};
+base::DataType Tensor::data_type() const { return data_type_; }
+
+void Tensor::set_device_type(base::DeviceType device_type) const {
+  if (buffer_) {
+    buffer_->set_device_type(device_type);
+  }
+}
 } // namespace tensor

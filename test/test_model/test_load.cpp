@@ -1,0 +1,96 @@
+#include "gtest/gtest.h"
+#include "glog/logging.h"
+#include "model/config.h"
+
+#include <fcntl.h>    // open for fd
+#include <sys/mman.h> // mmap
+#include <base/buffer.h>
+#include "op/matmul.h"
+
+// #include <cuda_runtime_api.h>
+
+TEST(test_load, config_weight){
+    std::string bin_path = "./tmp/test.bin"; // ISSUE
+    int32_t fd = open(bin_path.data(), O_RDONLY);
+    ASSERT_NE(fd, -1);
+    
+    FILE* file = fopen(bin_path.data(), "rb");// r 表示 读，b表示二进制 (+表示不存在则创建，r+要求必须存在）
+    ASSERT_NE(file, nullptr);
+
+    auto config = model::ModelConfig{};
+    fread(&config, sizeof(model::ModelConfig), 1, file);
+    // 1. config check
+    ASSERT_EQ(config.dim, 16);
+    ASSERT_EQ(config.hidden_dim, 128);
+    ASSERT_EQ(config.layer_num, 256);
+
+    // 2. get data
+    fseek(file, 0, SEEK_END);
+    auto file_size = ftell(file);
+
+    void* data = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    float* weight_data = reinterpret_cast<float*>(static_cast<int8_t*>(data) + sizeof(model::ModelConfig));
+
+    for(int i=0; i<config.dim * config.hidden_dim - 1; i++){
+        ASSERT_EQ(*(weight_data + i), float(i+1));
+    }
+}
+
+TEST(test_load, op_layer_mmCPU){
+    std::string model_path = "./tmp/test.bin";
+    int32_t fd = open(model_path.data(), O_RDONLY);
+    ASSERT_NE(fd, -1);
+
+    FILE* file = fopen(model_path.data(), "rb");
+    ASSERT_NE(file, nullptr);
+
+    auto config = model::ModelConfig{};
+    fread(&config, sizeof(model::ModelConfig), 1, file);
+
+    fseek(file, 0, SEEK_END);
+    auto file_size = ftell(file);
+
+    void* data = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    float* weight_data =
+        reinterpret_cast<float*>(static_cast<int8_t*>(data) + sizeof(model::ModelConfig));
+
+    for (int i = 0; i < config.dim * config.hidden_dim-1; ++i) {
+        ASSERT_EQ(*(weight_data + i), float(i+1));
+    }
+    /**                                  1
+     *    1 2 3 4 5 6 ... 1024           1
+     *                                   1
+     *                                   1
+     */
+    auto wq = std::make_shared<op::MatmulLayer>
+        (base::DeviceType::kDeviceCPU, config.dim, config.hidden_dim, false);
+    float* in = new float[config.hidden_dim];
+    for(int i=0; i<config.hidden_dim;i++){
+        in[i] = 1.f;
+    }
+
+    float* out = new float[config.dim];
+    for(int i=0; i<config.dim;i++){
+        out[i] = 0.f;
+    }
+    tensor::Tensor in_tensor(base::DataType::kDataTypeFp32, config.hidden_dim, false, nullptr, in);
+    in_tensor.set_device_type(base::DeviceType::kDeviceCPU);
+
+    tensor::Tensor out_tensor(base::DataType::kDataTypeFp32, config.dim, false, nullptr, out);
+    out_tensor.set_device_type(base::DeviceType::kDeviceCPU);
+
+    wq->set_input(0, in_tensor);
+    wq->set_output(0, out_tensor);
+    wq->set_weight(0, {config.dim, config.hidden_dim}, weight_data, base::DeviceType::kDeviceCPU);
+
+    wq->forward();
+
+    ASSERT_EQ(out[0], 8256);
+    ASSERT_EQ(out[1], 24640);
+    ASSERT_EQ(out[14], 237632);
+    // test.bin contains values 1..2047, so the final row has only 127 values.
+    ASSERT_EQ(out[15], 251968);
+
+    delete[] in;
+    delete[] out;
+}

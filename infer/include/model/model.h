@@ -1,0 +1,6 @@
+#ifndef INFER_INCLUDE_MODEL_MODEL_H_
+#define INFER_INCLUDE_MODEL_MODEL_H_
+
+
+
+#endif
