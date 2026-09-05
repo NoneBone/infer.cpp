@@ -90,14 +90,14 @@ RoPEKernel get_rope_kernel(base::DeviceType device_type) {
 //   }
 // }
 
-// SoftmaxInplaceKernel get_softmax_kernel(base::DeviceType device_type) {
-//   if (device_type == base::DeviceType::kDeviceCPU) {
-//     return softmax_inplace_cpu;
-//   } else {
-//     LOG(FATAL) << "Unknown device type for get an softmax kernel.";
-//     return nullptr;
-//   }
-// }
+SoftmaxInplaceKernel get_softmax_kernel(base::DeviceType device_type) {
+  if (device_type == base::DeviceType::kDeviceCPU) {
+    return softmax_inplace_cpu;
+  } else {
+    return softmax_inplace_cu;
+    return nullptr;
+  }
+}
 
 SwigluKernel get_swiglu_kernel(base::DeviceType device_type, void* stream) {
   if (device_type == base::DeviceType::kDeviceCPU) {
