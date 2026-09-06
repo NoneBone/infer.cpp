@@ -12,12 +12,12 @@ void mha_kernel(int32_t pos, int32_t head_num, int32_t layer_index, int32_t seq_
                 base::DeviceType device_type, CudaConfig* config) {
   int32_t layer_offset = layer_index * seq_len * kv_dim;
   float scale = 1.f / std::sqrt(static_cast<float>(head_size));
-  //   std::shared_ptr<base::DeviceAllocator> allocator;
-  //   if (device_type == base::DeviceType::kDeviceCPU) {
-  //     allocator = base::CPUDeviceAllocatorFactory::get_instance();
-  //   } else {
-  //     allocator = base::CUDADeviceAllocatorFactory::get_instance();
-  //   }
+    std::shared_ptr<base::DeviceAllocator> allocator;
+    if (device_type == base::DeviceType::kDeviceCPU) {
+      allocator = base::CPUDeviceAllocatorFactory::get_instance();
+    } else {
+      allocator = base::CUDADeviceAllocatorFactory::get_instance();
+    }
   for (int32_t h = 0; h < head_num; ++h) {
     float* score_head_addr = const_cast<float*>(score_tensor.ptr<float>() + h * seq_len);
     float* query_head_addr = const_cast<float*>(query_tensor.ptr<float>() + h * head_size);
@@ -46,7 +46,9 @@ void mha_kernel(int32_t pos, int32_t head_num, int32_t layer_index, int32_t seq_
     get_softmax_kernel(device_type)(score_head_tensor, config ? config->stream : nullptr);
 
     float* output_head_ptr = const_cast<float*>(mha_out.ptr<float>()) + h * head_size;
-    std::fill_n(output_head_ptr, head_size, 0.f);
+    // std::fill_n(output_head_ptr, head_size, 0.f);
+    allocator->memset_zero(output_head_ptr, sizeof(float) * head_size,
+                              config ? config->stream : nullptr, false);
     tensor::Tensor output_tensor(base::DataType::kDataTypeFp32, head_size, false, nullptr,
                                  output_head_ptr);
     output_tensor.set_device_type(device_type);

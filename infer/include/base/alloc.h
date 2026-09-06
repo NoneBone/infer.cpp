@@ -20,6 +20,8 @@ public:
     virtual void memcpy(const void *src_ptr, void *dst_ptr, size_t byte_size,
                         MemcpyKind memcpy_kind = MemcpyKind::kMemcpyCPU2CPU, 
                         void *stream = nullptr, bool need_sync = false) const;
+// TODO
+  virtual void memset_zero(void* ptr, size_t byte_size, void* stream, bool need_sync = false);
 
 private:
     DeviceType device_type_ = DeviceType::kDeviceUnknown;
@@ -32,13 +34,15 @@ public:
     void* allocate(size_t byte_size) const override;// 函数签名
     void release(void* ptr) const override;// override 表示这个函数必须重写基类虚函数
 };
-
+// struct CudaMemoryBuffer {} // TODO
 class CUDADeviceAllocator : public DeviceAllocator {
 public:
     explicit CUDADeviceAllocator();
 
     void* allocate(size_t byte_size) const override;
     void release(void* ptr) const override;
+private:
+ // TODO: 当前空闲内存
 };
 // factory entry
 class CPUDeviceAllocatorFactory{

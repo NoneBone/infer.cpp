@@ -160,5 +160,8 @@ Status KeyHasExits(const std::string& err_msg = "");
 Status InvalidArgument(const std::string& err_msg = "");
 
 }  // namespace error
+
+// std::ostream& operator<<(std::ostream& os, const Status& x);// TODO
+
 } // namespace base
 #endif // INFER_INCLUDE_BASE_H

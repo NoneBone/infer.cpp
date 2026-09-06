@@ -27,6 +27,9 @@ public:
     void* ptr();
     const void* ptr() const;
     bool is_external() const;
+
+    // std::shared_ptr<Buffer> get_shared_from_this();// TODO
+
 };
 } // namespace base
 #endif

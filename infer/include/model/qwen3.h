@@ -34,9 +34,9 @@ struct Qwen3Layers{
 
     std::vector<std::shared_ptr<op::Layer>> w1_layers_;
     std::vector<std::shared_ptr<op::Layer>> w2_layers_;
+    std::vector<std::shared_ptr<op::Layer>> rmsnorm_layers_;
     std::vector<std::shared_ptr<op::Layer>> w3_layers_;
 
-    std::vector<std::shared_ptr<op::Layer>> rmsnorm_layers_;
     std::shared_ptr<op::Layer> cls_layer_;
     std::shared_ptr<op::Layer> emb_layer_;
 

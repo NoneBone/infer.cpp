@@ -7,7 +7,9 @@
 #include "base/unordered_dense.h"
 #include "nlohmann/json.hpp"
 #include "op/layer.h"
-
+#include <absl/strings/str_join.h>
+#include <absl/strings/str_replace.h>
+#include <absl/strings/str_split.h>
 namespace op
 {
 class EncodeLayerBase : public Layer {

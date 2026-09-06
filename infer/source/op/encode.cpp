@@ -67,16 +67,16 @@ namespace {
 using json = nlohmann::json;
 using TokenMap = ankerl::unordered_dense::map<std::string, int>;
 
-std::string replace_all(std::string text, const std::map<std::string, std::string>& replacements) {
-  for (const auto& [from, to] : replacements) {
-    size_t pos = 0;
-    while ((pos = text.find(from, pos)) != std::string::npos) {
-      text.replace(pos, from.size(), to);
-      pos += to.size();
-    }
-  }
-  return text;
-}
+// std::string replace_all(std::string text, const std::map<std::string, std::string>& replacements) {
+//   for (const auto& [from, to] : replacements) {
+//     size_t pos = 0;
+//     while ((pos = text.find(from, pos)) != std::string::npos) {
+//       text.replace(pos, from.size(), to);
+//       pos += to.size();
+//     }
+//   }
+//   return text;
+// }
 
 struct LoadedBpeTokens {
   TokenMap encoder;
@@ -215,7 +215,7 @@ std::vector<int32_t> BpeEncodeLayer::encode(const std::string& sentence) const {
   CHECK(this->tiktoken_ != nullptr);
   std::map<std::string, std::string> replacements;
   replacements[" "] = "Ġ";
-  std::string s = replace_all(sentence, replacements);
+  std::string s = absl::StrReplaceAll(sentence, replacements);
   auto input_ids = this->tiktoken_->encode(s);
 
   if (has_bos_) {
@@ -234,7 +234,7 @@ std::string BpeEncodeLayer::decode(const std::vector<int32_t>& token_ids) const 
   auto s = tiktoken_->decode(token_ids);
   std::map<std::string, std::string> reverse_replacements;
   reverse_replacements["Ġ"] = " ";
-  const std::string sentence = replace_all(s, reverse_replacements);
+  const std::string sentence = absl::StrReplaceAll(s, reverse_replacements);
   return sentence;
 }
 

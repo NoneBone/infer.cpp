@@ -26,5 +26,23 @@ void DeviceAllocator::memcpy(const void *src_ptr, void *dst_ptr, size_t byte_siz
         cudaDeviceSynchronize();
     }
 };
-    
+
+void DeviceAllocator::memset_zero(void* ptr, size_t byte_size, void* stream,
+                                  bool need_sync) {
+  CHECK(device_type_ != base::DeviceType::kDeviceUnknown);
+  if (device_type_ == base::DeviceType::kDeviceCPU) {
+    std::memset(ptr, 0, byte_size);
+  } else {
+    if (stream) {
+      cudaStream_t stream_ = static_cast<cudaStream_t>(stream);
+      cudaMemsetAsync(ptr, 0, byte_size, stream_);
+    } else {
+      cudaMemset(ptr, 0, byte_size);
+    }
+    if (need_sync) {
+      cudaDeviceSynchronize();
+    }
+  }
+}
+
 }// namespace base

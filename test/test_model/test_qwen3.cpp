@@ -65,8 +65,6 @@ std::string fill_template(const std::string& content) {
 
 TEST(test_qwen3, cuda) {
   using namespace base;
-  std::shared_ptr<base::CPUDeviceAllocator> alloc =
-      std::make_shared<base::CPUDeviceAllocator>();
 
   const char* checkpoint_path = "tools/export_qwen3/qwen0.6.bin";  // e.g. out/model.bin
   const char* tokenizer_path = "Qwen/Qwen3-0.6B/tokenizer_config.json";

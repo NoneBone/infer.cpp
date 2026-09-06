@@ -54,6 +54,9 @@ if(QWEN_SOURCES)
     target_include_directories(qwen PUBLIC ${PROJECT_SOURCE_DIR}/infer/include)
     target_include_directories(qwen PUBLIC ${Armadillo_INCLUDE_DIR})
     target_include_directories(qwen PUBLIC ${CUDA_INCLUDE_DIR})
+    # sentencepiece_processor.h provides a fallback absl::string_view unless
+    # it is told to use the same installed Abseil headers as this project.
+    target_compile_definitions(qwen PUBLIC _USE_TF_STRING_VIEW)
 endif()
 
 

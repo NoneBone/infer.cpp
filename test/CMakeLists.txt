@@ -1,7 +1,8 @@
 find_package(GTest REQUIRED)
 find_package(glog REQUIRED)
+find_package(absl REQUIRED)
 
-set(link_ext_lib glog::glog GTest::gtest)
+set(link_ext_lib glog::glog GTest::gtest absl::strings)
 file(GLOB_RECURSE DIR_TESTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/test_tensor/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_op/*.cpp"
@@ -22,6 +23,7 @@ target_include_directories(test_unit PRIVATE
     ${PROJECT_SOURCE_DIR}/test
     ${CUDA_INCLUDE_DIR}
 )
+target_compile_definitions(test_unit PRIVATE _USE_TF_STRING_VIEW)
 if(TARGET qwen)
     target_link_directories(test_unit PUBLIC ${PROJECT_SOURCE_DIR}/lib)
     target_link_libraries(test_unit qwen)
