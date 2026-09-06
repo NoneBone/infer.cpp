@@ -23,6 +23,20 @@ Buffer::~Buffer() {
     }
 };
 
+bool Buffer::allocate() {
+  if (allocator_ && byte_size_ != 0) {
+    use_external_ = false;
+    ptr_ = allocator_->allocate(byte_size_);
+    if (!ptr_) {
+      return false;
+    } else {
+      return true;
+    }
+  } else {
+    return false;
+  }
+}
+
 void Buffer::copy_from(const Buffer& src) const{// 引用写法，传入的是实际对象
     CHECK(allocator_ != nullptr);
     CHECK(ptr_ != nullptr);

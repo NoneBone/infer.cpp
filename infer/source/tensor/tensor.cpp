@@ -15,9 +15,9 @@ Tensor::Tensor(base::DataType data_type, int32_t dim0, bool need_alloc,
                 << "When ptr is not nullptr, need_alloc should be false, but here is true";
             init_buffer(allocator, data_type, need_alloc, ptr);
         }
-        else{
-            LOG(INFO) << "Nullptr was passed in, please set need_alloc as true to avoid is_empty.";
-        }
+        // else{
+        //     LOG(INFO) << "Nullptr was passed in, please set need_alloc as true to avoid is_empty.";
+        // }
     }
 };
 
@@ -32,6 +32,37 @@ Tensor::Tensor(base::DataType data_type, int32_t dim0, int32_t dim1, bool need_a
         init_buffer(allocator, data_type, need_alloc, ptr);
     }
 };
+
+
+Tensor::Tensor(base::DataType data_type, int32_t dim0, int32_t dim1, int32_t dim2, bool need_alloc,
+               std::shared_ptr<base::DeviceAllocator> alloc, void* ptr)
+    : data_type_(data_type) {
+  dims_.push_back(dim0);
+  dims_.push_back(dim1);
+  dims_.push_back(dim2);
+  size_ = dim0 * dim1 * dim2;
+  if (need_alloc && alloc) {
+    allocate_now(alloc);
+  } else {
+    init_buffer(alloc, data_type_, need_alloc, ptr);
+  }
+}
+
+Tensor::Tensor(base::DataType data_type, int32_t dim0, int32_t dim1, int32_t dim2, int32_t dim3,
+               bool need_alloc, std::shared_ptr<base::DeviceAllocator> alloc, void* ptr)
+    : data_type_(data_type) {
+  dims_.push_back(dim0);
+  dims_.push_back(dim1);
+  dims_.push_back(dim2);
+  dims_.push_back(dim3);
+  size_ = dim0 * dim1 * dim2 * dim3;
+  if (need_alloc && alloc) {
+    allocate_now(alloc);
+  } else {
+    init_buffer(alloc, data_type_, need_alloc, ptr);
+  }
+}
+
 
 template <typename T, typename Tp>
 static size_t reduce_dimension(T begin, T end, Tp init) {
@@ -159,4 +190,24 @@ void Tensor::set_device_type(base::DeviceType device_type) const {
     buffer_->set_device_type(device_type);
   }
 }
+
+void Tensor::reshape(const std::vector<int32_t>& dims) {
+  size_t size = reduce_dimension(dims.begin(), dims.end(), 1);
+  if (!buffer_) {
+    this->dims_ = dims;
+    this->size_ = size;
+    return;
+  }
+
+  if (size > size_) {
+    auto new_buffer = std::make_shared<base::Buffer>(size * base::DataTypeSize(this->data_type_),
+                                                     buffer_->get_allocator());
+    CHECK(new_buffer->allocate());
+    new_buffer->copy_from(buffer_.get());
+    this->buffer_ = new_buffer;
+  }
+  this->dims_ = dims;
+  this->size_ = size;
+}
+
 } // namespace tensor

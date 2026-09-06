@@ -19,7 +19,7 @@
 #include "cuda/mha_kernel.cuh"
 #include "cuda/rmsnorm_kernel.cuh"
 #include "cuda/rope_kernel.cuh"
-#include "cuda/scale_kernel.cuh"
+// #include "cuda/scale_kernel.cuh"
 #include "cuda/scale_sum_kernel.cuh"
 #include "cuda/softmax_kernel.cuh"
 #include "cuda/swiglu_kernel.cuh"
@@ -121,14 +121,14 @@ RMSNormKernel get_rmsnorm_kernel(base::DeviceType device_type) {
   }
 }
 
-// RMSNormKernelDim get_rmsnorm_dim_kernel(base::DeviceType device_type) {
-//   if (device_type == base::DeviceType::kDeviceCUDA) {
-//     return rmsnorm_kernel_cu_dim;
-//   } else {
-//     LOG(FATAL) << "Unknown device type for get a rmsnorm dim kernel.";
-//     return nullptr;
-//   }
-// }
+RMSNormKernelDim get_rmsnorm_dim_kernel(base::DeviceType device_type) {
+  if (device_type == base::DeviceType::kDeviceCUDA) {
+    return rmsnorm_kernel_cu_dim;
+  } else {
+    LOG(FATAL) << "Unknown device type for get a rmsnorm dim kernel.";
+    return nullptr;
+  }
+}
 
 ScaleSumKernel get_scale_sum_kernel(base::DeviceType device_type) {
   if (device_type == base::DeviceType::kDeviceCPU) {

@@ -13,6 +13,9 @@ public:
     base::Status set_bias(int32_t idx, int32_t& dims, const void* bias_ptr,
                           base::DeviceType device_type);
     tensor::Tensor& get_bias(int32_t idx);
+    const tensor::Tensor& get_bias(int32_t idx) const;
+
+    void to_cuda() override;
 private:
     int32_t dim0_ = 0;
     int32_t dim1_ = 0;

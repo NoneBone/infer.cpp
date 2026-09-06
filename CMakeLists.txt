@@ -13,6 +13,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 find_package(glog REQUIRED)
 find_package(Armadillo REQUIRED)
+find_package(absl REQUIRED)
+find_package(nlohmann_json REQUIRED)
+find_library(RE2_LIBRARY re2 REQUIRED)
 
 aux_source_directory(infer/source/base/ DIR_BASE)
 aux_source_directory(infer/source/model/ DIR_MODEL)
@@ -32,8 +35,21 @@ find_package(GTest REQUIRED)
 set(QWEN_SOURCES ${DIR_TENSOR} ${DIR_BASE} ${DIR_OP} ${DIR_MODEL} ${DIR_KERNEL} ${DIR_SAMPLE})
 if(QWEN_SOURCES)
     add_library(qwen SHARED ${QWEN_SOURCES})
-    target_link_libraries(qwen sentencepiece glog::glog gtest gtest_main pthread ${CUDART_LIBRARY})
-    target_link_libraries(qwen ${ARMADILLO_LIBRARIES})
+    target_link_libraries(qwen
+        PRIVATE
+            sentencepiece
+            glog::glog
+            absl::base
+            absl::strings
+            gtest
+            gtest_main
+            pthread
+            ${RE2_LIBRARY}
+            ${CUDART_LIBRARY}
+            ${ARMADILLO_LIBRARIES}
+        PUBLIC
+            nlohmann_json::nlohmann_json
+    )
     target_include_directories(qwen PUBLIC ${glog_INCLUDE_DIR})
     target_include_directories(qwen PUBLIC ${PROJECT_SOURCE_DIR}/infer/include)
     target_include_directories(qwen PUBLIC ${Armadillo_INCLUDE_DIR})

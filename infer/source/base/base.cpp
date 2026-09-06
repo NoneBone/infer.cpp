@@ -32,6 +32,14 @@ Status::operator bool() const {
   return code_ == kSuccess;
 }
 
+int32_t Status::get_err_code() const {
+  return code_;
+}
+
+const std::string& Status::get_err_msg() const { return message_; }
+
+void Status::set_err_msg(const std::string& err_msg) { message_ = err_msg; }
+
 namespace error {
 Status Success(const std::string& err_msg) { return Status{kSuccess, err_msg}; }
 

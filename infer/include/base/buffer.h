@@ -16,7 +16,7 @@ public:
                     void* ptr = nullptr, bool use_external = false);
     virtual ~Buffer();
 
-    bool allocate(); // TODO
+    bool allocate();
     void copy_from(const Buffer& buffer) const;// 必须传入一个 Buffer 对象,const 表示只能读取a的成员，不能修改
     void copy_from(const Buffer* buffer) const;// 传入的地址，可以是nullptr
 
