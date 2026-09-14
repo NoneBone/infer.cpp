@@ -65,10 +65,14 @@ std::string fill_template(const std::string& content) {
 
 TEST(test_qwen3, cuda) {
   using namespace base;
-
+    nvTT.time_push("all");
+    mP.mem_push("af_init");
+    nvTT.time_push("model.build");
   const char* checkpoint_path = "tools/export_qwen3/qwen0.6.bin";  // e.g. out/model.bin
   const char* tokenizer_path = "Qwen/Qwen3-0.6B/tokenizer_config.json";
   model::Qwen3Model model(base::TokenizerType::kEncodeBpe, tokenizer_path, checkpoint_path, false);
+    nvTT.time_pop("");
+    nvTT.time_push("model.init");
   auto status = model.init(base::DeviceType::kDeviceCUDA);
   ASSERT_TRUE(status) << "Qwen3 model initialization failed: " << status.get_err_msg();
   const int total_steps = 256;
@@ -77,6 +81,10 @@ TEST(test_qwen3, cuda) {
     std::string hi = "What is AI?";
     std::cout << hi << "\n";
     const std::string& sentence = fill_template(hi);
+    nvTT.time_pop("");
+    mP.mem_push("af_pre");
+    nvTT.time_push("infer");
+    
     auto start = std::chrono::steady_clock::now();
     fflush(stdout);
     int steps = generate(model, sentence, total_steps, true);
@@ -85,6 +93,9 @@ TEST(test_qwen3, cuda) {
     LOG(INFO) << "\nsteps: " << steps << "\nduration: " << duration
               << "\nsteps/s: " << (duration > 0.0 ? static_cast<double>(steps) / duration : 0.0);
     fflush(stdout);
+    nvTT.time_pop("infer");
+    mP.mem_push("af_infer");
+    nvTT.time_push("post");
 //     const auto s = model.forward(tokens, 1);
     const float* logits =
         model.get_buffer(model::ModelBufferType::kForwardOutput).ptr<float>();
@@ -101,5 +112,10 @@ TEST(test_qwen3, cuda) {
     std::cout << "first logits:";
     for (size_t i = 0; i < sample_count; ++i) std::cout << ' ' << sample[i];
     std::cout << '\n';
+    nvTT.time_pop("post");
+    mP.mem_push("af_post");
   }
+    nvTT.time_pop("all");
+    nvTT.print_avg_stats();
+    mP.print_mem_info();
 }

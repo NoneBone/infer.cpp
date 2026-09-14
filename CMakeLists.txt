@@ -8,6 +8,7 @@ set(CUDA_INCLUDE_DIR "${CUDA_TOOLKIT_ROOT_DIR}/targets/x86_64-linux/include")
 find_library(CUDART_LIBRARY cudart
     PATHS "${CUDA_TOOLKIT_ROOT_DIR}/targets/x86_64-linux/lib"
     REQUIRED)
+find_library(NVML_LIBRARY nvidia-ml REQUIRED)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -46,6 +47,7 @@ if(QWEN_SOURCES)
             pthread
             ${RE2_LIBRARY}
             ${CUDART_LIBRARY}
+            ${NVML_LIBRARY}
             ${ARMADILLO_LIBRARIES}
         PUBLIC
             nlohmann_json::nlohmann_json

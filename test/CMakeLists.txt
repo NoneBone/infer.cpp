@@ -14,7 +14,7 @@ add_executable(test_unit
     ${PROJECT_SOURCE_DIR}/test/utils.cu
 )
 
-target_link_libraries(test_unit ${link_ext_lib} ${CUDART_LIBRARY})
+target_link_libraries(test_unit ${link_ext_lib} ${CUDART_LIBRARY} ${NVML_LIBRARY})
 target_include_directories(test_unit PUBLIC ${glog_INCLUDE_DIR})
 target_include_directories(test_unit PUBLIC ${GTest_INCLUDE_DIR})
 

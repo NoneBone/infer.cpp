@@ -68,4 +68,6 @@ Status KeyHasExits(const std::string& err_msg) {
 }
 }  // namespace error
 
+nvtxTimeTable nvTT;
+memoryProfiler mP;
 }// namespace base

@@ -141,11 +141,17 @@ base::Status Qwen3Model::init(base::DeviceType device_type) {
     }
   }
 
+  base::nvTT.time_push("gen_cost_t");
   Status read_status = gen_model_from_file();
+  base::nvTT.time_pop("gen_cost_t");
+  base::mP.mem_push("af_gen");
   if (!read_status) {
     return read_status;
   }
+  base::nvTT.time_push("pre_alloc");
   init_mem();
+  base::nvTT.time_pop("pre_alloc");
+  base::mP.mem_push("af_alloc");
   if (device_type_ == base::DeviceType::kDeviceCPU) {
     kernel::sin_cos_cache_calc_cpu(config_->head_size_, config_->seq_len_,
                                    get_buffer(ModelBufferType::kSinCache).ptr<float>(),
@@ -332,7 +338,7 @@ void Qwen3Model::init_mem() {
       base::CPUDeviceAllocatorFactory::get_instance();
   std::shared_ptr<base::DeviceAllocator> alloc_cu =
       base::CUDADeviceAllocatorFactory::get_instance();
-
+  // 预分配缓冲区，所有中间计算结果都复用这些预分配的缓冲区，避免推理过程中的动态内存分配。
   tensor::Tensor input_tokens(base::DataType::kDataTypeInt32, 1, true, alloc_cpu);
   tensor::Tensor input_embeddings(base::DataType::kDataTypeFp32, 1, config_->hidden_dim_, true,
                                   alloc);
@@ -340,7 +346,7 @@ void Qwen3Model::init_mem() {
                            true, alloc);
   tensor::Tensor cos_cache(base::DataType::kDataTypeFp32, config_->head_size_ * config_->seq_len_,
                            true, alloc);
-
+  // ISSUE: buffermap 设计
   CHECK(insert_buffer(ModelBufferType::kSinCache, sin_cache));
   CHECK(insert_buffer(ModelBufferType::kCosCache, cos_cache));
 
