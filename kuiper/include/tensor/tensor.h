@@ -10,7 +10,12 @@
 namespace tensor {
 
 class Tensor {
- public:
+private:
+  size_t size_ = 0;
+  std::vector<int32_t> dims_;
+  std::shared_ptr<base::Buffer> buffer_;
+  base::DataType data_type_ = base::DataType::kDataTypeUnknown;
+  public:
   explicit Tensor() = default;
 
   explicit Tensor(base::DataType data_type, int32_t dim0, bool need_alloc = false,
@@ -29,21 +34,30 @@ class Tensor {
 
   explicit Tensor(base::DataType data_type, std::vector<int32_t> dims, bool need_alloc = false,
                   std::shared_ptr<base::DeviceAllocator> alloc = nullptr, void* ptr = nullptr);
+  bool allocate(std::shared_ptr<base::DeviceAllocator> allocator, bool need_realloc = false);
 
+
+
+  void init_buffer(std::shared_ptr<base::DeviceAllocator> alloc, base::DataType data_type,
+                   bool need_alloc, void* ptr);
+  bool assign(std::shared_ptr<base::Buffer> buffer);
   void to_cpu();
 
   void to_cuda(cudaStream_t stream = nullptr);
 
+  tensor::Tensor clone() const;
   bool is_empty() const;
-
-  void init_buffer(std::shared_ptr<base::DeviceAllocator> alloc, base::DataType data_type,
-                   bool need_alloc, void* ptr);
-
   template <typename T>
   T* ptr();
 
   template <typename T>
   const T* ptr() const;
+
+  template <typename T>
+  T* ptr(int64_t index);
+
+  template <typename T>
+  const T* ptr(int64_t index) const;
 
   void reshape(const std::vector<int32_t>& dims);
 
@@ -63,7 +77,6 @@ class Tensor {
 
   std::vector<size_t> strides() const;
 
-  bool assign(std::shared_ptr<base::Buffer> buffer);
 
   void reset(base::DataType data_type, const std::vector<int32_t>& dims);
 
@@ -71,13 +84,8 @@ class Tensor {
 
   base::DeviceType device_type() const;
 
-  bool allocate(std::shared_ptr<base::DeviceAllocator> allocator, bool need_realloc = false);
 
-  template <typename T>
-  T* ptr(int64_t index);
 
-  template <typename T>
-  const T* ptr(int64_t index) const;
 
   template <typename T>
   T& index(int64_t offset);
@@ -85,13 +93,7 @@ class Tensor {
   template <typename T>
   const T& index(int64_t offset) const;
 
-  tensor::Tensor clone() const;
 
- private:
-  size_t size_ = 0;
-  std::vector<int32_t> dims_;
-  std::shared_ptr<base::Buffer> buffer_;
-  base::DataType data_type_ = base::DataType::kDataTypeUnknown;
 };
 
 template <typename T>

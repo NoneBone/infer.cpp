@@ -58,6 +58,10 @@ std::string fill_template(const std::string& content) {
 }
 
 int main(int argc, char* argv[]) {
+  using namespace base;
+  base::nvTT.time_push("all");
+  base::mP.mem_push("af_init");
+
   if (argc < 3 || argc > 5) {
     LOG(INFO) << "Usage: ./demo checkpoint path tokenizer path [cuda|cpu] [total steps]";
     return -1;
@@ -86,12 +90,29 @@ int main(int argc, char* argv[]) {
   const std::string& sentence = fill_template(hi);
   auto start = std::chrono::steady_clock::now();
   fflush(stdout);
-  int steps = generate(model, sentence, total_steps, true);
+
+  int warmup = 3;
+  int repeat = 10;
+  for (int i = 0; i < warmup; ++i) {
+      int steps = generate(model, sentence, total_steps, false);
+      cudaDeviceSynchronize();
+  }
+  
+  for (int i = 0; i < repeat; ++i) {
+    nvTT.time_push("infer");
+    int steps = generate(model, sentence, total_steps, (i==repeat-1));
+    nvTT.time_pop("infer");
+  }
+  mP.mem_push("af_infer");
   auto end = std::chrono::steady_clock::now();
   auto duration = std::chrono::duration<double>(end - start).count();
-  printf("\nsteps:%d\n", steps);
-  printf("\nduration:%lf\n", duration);
-  printf("\nsteps/s:%lf\n", static_cast<double>(steps) / duration);
+  // printf("\nsteps:%d\n", steps);
+  // printf("\nduration:%lf\n", duration);
+  // printf("\nsteps/s:%lf\n", static_cast<double>(steps) / duration);
   fflush(stdout);
+  base::nvTT.time_pop("all");
+
+  base::nvTT.print_avg_stats();
+  base::mP.print_mem_info();
   return 0;
 }

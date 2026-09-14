@@ -138,11 +138,17 @@ base::Status Qwen3Model::init(base::DeviceType device_type) {
     }
   }
 
+  base::nvTT.time_push("gen_cost_t");
   Status read_status = gen_model_from_file();
+  base::nvTT.time_pop("gen_cost_t");
+  base::mP.mem_push("af_gen");
   if (!read_status) {
     return read_status;
   }
+  base::nvTT.time_push("pre_alloc");
   init_mem();
+  base::nvTT.time_pop("pre_alloc");
+  base::mP.mem_push("af_alloc");
   if (device_type_ == base::DeviceType::kDeviceCPU) {
     kernel::sin_cos_cache_calc_cpu(config_->head_size_, config_->seq_len_,
                                    get_buffer(ModelBufferType::kSinCache).ptr<float>(),

@@ -72,5 +72,6 @@ std::ostream& operator<<(std::ostream& os, const Status& x) {
   os << x.get_err_msg();
   return os;
 }
-
+nvtxTimeTable nvTT;
+memoryProfiler mP;
 }  // namespace base

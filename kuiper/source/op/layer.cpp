@@ -36,23 +36,12 @@ void BaseLayer::set_device_type(base::DeviceType device_type) { device_type_ = d
 Layer::Layer(base::DeviceType device_type, LayerType layer_type, std::string layer_name)
     : BaseLayer(device_type, layer_type, base::DataType::kDataTypeFp32, std::move(layer_name)) {}
 
+
 base::Status Layer::init() { return base::error::Success(); }
 
 base::Status Layer::forward() { return base::error::FunctionNotImplement(""); }
 
-base::Status Layer::check_tensor(const tensor::Tensor& tensor, base::DeviceType device_type,
-                                 base::DataType data_type) const {
-  if (tensor.is_empty()) {
-    return base::error::InvalidArgument("The tensor parameter is empty.");
-  }
-  if (tensor.device_type() != device_type) {
-    return base::error::InvalidArgument("The tensor has a wrong device type.");
-  }
-  if (tensor.data_type() != data_type) {
-    return base::error::InvalidArgument("The tensor has a wrong data type.");
-  }
-  return base::error::Success();
-}
+
 
 base::Status Layer::check_tensor_with_dim(const tensor::Tensor& tensor,
                                           base::DeviceType device_type, base::DataType data_type,
@@ -98,6 +87,12 @@ const tensor::Tensor& Layer::get_input(int32_t idx) const {
   return inputs_.at(idx);
 }
 
+const tensor::Tensor& Layer::get_output(int32_t idx) const {
+  CHECK_GE(idx, 0);
+  CHECK_LT(idx, outputs_.size());
+  return outputs_.at(idx);
+}
+
 tensor::Tensor& Layer::get_input(int32_t idx) {
   CHECK_GE(idx, 0);
   CHECK_LT(idx, inputs_.size());
@@ -114,15 +109,23 @@ base::Status Layer::check() const {
   return base::error::FunctionNotImplement("The check function is not implement yet");
 }
 
-const tensor::Tensor& Layer::get_output(int32_t idx) const {
-  CHECK_GE(idx, 0);
-  CHECK_LT(idx, outputs_.size());
-  return outputs_.at(idx);
-}
 
 void Layer::reset_input_size(size_t size) { inputs_.resize(size); }
 
 void Layer::reset_output_size(size_t size) { outputs_.resize(size); }
+void LayerParam::reset_weight_size(size_t size) { weights_.resize(size); }
+
+size_t Layer::input_size() const { return inputs_.size(); }
+
+size_t Layer::output_size() const { return outputs_.size(); }
+
+void Layer::set_cuda_config(std::shared_ptr<kernel::CudaConfig> config) {
+  if (!config) {
+    return;
+  }
+  this->cuda_config_ = config;
+}
+std::shared_ptr<kernel::CudaConfig> Layer::cuda_config() const { return cuda_config_; }
 
 void Layer::to_cuda() {
   for (auto& input : inputs_) {
@@ -137,39 +140,6 @@ void Layer::to_cuda() {
   }
 }
 
-void Layer::set_cuda_config(std::shared_ptr<kernel::CudaConfig> config) {
-  if (!config) {
-    return;
-  }
-  this->cuda_config_ = config;
-}
-
-std::shared_ptr<kernel::CudaConfig> Layer::cuda_config() const { return cuda_config_; }
-
-size_t Layer::input_size() const { return inputs_.size(); }
-
-size_t Layer::output_size() const { return outputs_.size(); }
-
-LayerParam::LayerParam(base::DeviceType device_type, LayerType layer_type, bool is_quant_layer,
-                       std::string layer_name)
-    : Layer(device_type, layer_type, std::move(layer_name)), is_quant_layer_(is_quant_layer) {}
-
-base::Status LayerParam::set_weight(int32_t idx, const tensor::Tensor& weight) {
-  CHECK_GE(idx, 0);
-  CHECK_LT(idx, weights_.size());
-  CHECK(weight.data_type() == base::DataType::kDataTypeFp32);
-  if (!weight.is_empty()) {
-    CHECK(weight.device_type() == device_type_);
-  }
-  weights_.at(idx) = weight;
-  return base::error::Success();
-}
-
-const tensor::Tensor& LayerParam::get_weight(int32_t idx) const {
-  CHECK_GE(idx, 0);
-  CHECK_LT(idx, weights_.size());
-  return weights_.at(idx);
-}
 
 void LayerParam::to_cuda() {
   Layer::to_cuda();
@@ -218,6 +188,32 @@ base::Status LayerParam::set_weight(int32_t idx, const std::vector<int32_t>& dim
   return base::error::Success();
 }
 
+base::Status Layer::check_tensor(const tensor::Tensor& tensor, base::DeviceType device_type,
+                                 base::DataType data_type) const {
+  if (tensor.is_empty()) {
+    return base::error::InvalidArgument("The tensor parameter is empty.");
+  }
+  if (tensor.device_type() != device_type) {
+    return base::error::InvalidArgument("The tensor has a wrong device type.");
+  }
+  if (tensor.data_type() != data_type) {
+    return base::error::InvalidArgument("The tensor has a wrong data type.");
+  }
+  return base::error::Success();
+}
+
+
+base::Status LayerParam::set_weight(int32_t idx, const tensor::Tensor& weight) {
+  CHECK_GE(idx, 0);
+  CHECK_LT(idx, weights_.size());
+  CHECK(weight.data_type() == base::DataType::kDataTypeFp32);
+  if (!weight.is_empty()) {
+    CHECK(weight.device_type() == device_type_);
+  }
+  weights_.at(idx) = weight;
+  return base::error::Success();
+}
+
 void LayerParam::set_scales(const tensor::Tensor& scales) {
   CHECK(!scales.is_empty());
   this->scales_ = scales;
@@ -230,7 +226,6 @@ int32_t LayerParam::get_scale_num() const {
   return static_cast<int32_t>(scales_.size());
 }
 
-void LayerParam::reset_weight_size(size_t size) { weights_.resize(size); }
 
 size_t LayerParam::weight_size() const { return weights_.size(); }
 
@@ -284,7 +279,18 @@ base::Status Layer::forward(const tensor::Tensor& input1, const tensor::Tensor& 
   return this->forward();
 }
 
+LayerParam::LayerParam(base::DeviceType device_type, LayerType layer_type, bool is_quant_layer,
+                       std::string layer_name)
+    : Layer(device_type, layer_type, std::move(layer_name)), is_quant_layer_(is_quant_layer) {}
+
+
 tensor::Tensor& LayerParam::get_weight(int32_t idx) {
+  CHECK_GE(idx, 0);
+  CHECK_LT(idx, weights_.size());
+  return weights_.at(idx);
+}
+
+const tensor::Tensor& LayerParam::get_weight(int32_t idx) const {
   CHECK_GE(idx, 0);
   CHECK_LT(idx, weights_.size());
   return weights_.at(idx);

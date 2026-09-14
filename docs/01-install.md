@@ -46,7 +46,8 @@ cd ../..
 
 ```shell
 rm -rf build
-cmake -S . -B build -DUSE_CPM=ON -DQWEN3_SUPPORT=ON
+cache_dir=/media/l8w/Linux118/PROJECTS/04-cpp/infer.cpp/build
+cmake -S . -B build -DUSE_CPM=ON -DQWEN3_SUPPORT=ON -DCPM_LOCAL_FILE=$cache_dir/cmake/CPM_0.39.0.cmake   -DFETCHCONTENT_SOURCE_DIR_GTEST=$cache_dir/_deps/gtest-src   -DFETCHCONTENT_SOURCE_DIR_GLOG=$cache_dir/_deps/glog-src   -DFETCHCONTENT_SOURCE_DIR_ARMADILLO=$cache_dir/_deps/armadillo-src   -DFETCHCONTENT_SOURCE_DIR_SENTENCEPIECE=$cache_dir/_deps/sentencepiece-src   -DFETCHCONTENT_SOURCE_DIR_ABSL=$cache_dir/_deps/absl-src   -DFETCHCONTENT_SOURCE_DIR_RE2=$cache_dir/_deps/re2-src   -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=$cache_dir/_deps/nlohmann_json-src
 cmake --build build -j16
 ```
 

@@ -3,6 +3,23 @@
 #include <glog/logging.h>
 #include <cstdint>
 #include <string>
+
+#define ANA_MEM_TIME 1
+#ifdef ANA_MEM_TIME
+#include <iostream>
+#include <chrono>
+#include <algorithm>
+#include <chrono>
+#include <stack>
+#include <map>
+#include <cuda_runtime_api.h>
+#include <cuda.h>
+#include <iomanip>
+#include <nvml.h> // -lnvidia-ml
+using hsClock = std::chrono::high_resolution_clock;
+using microSec = std::chrono::microseconds;
+#endif
+
 #define UNUSED(expr) \
   do {               \
     (void)(expr);    \
@@ -151,5 +168,118 @@ Status InvalidArgument(const std::string& err_msg = "");
 
 std::ostream& operator<<(std::ostream& os, const Status& x);
 
+#ifdef ANA_MEM_TIME
+
+//!
+//! \class nvtxTimeTable
+//!
+//! \brief time trace usage:
+//!
+//!    nvtxTimeTable nvTT;
+//!    nvTT.time_push("abcd");
+//!    nvTT.time_pop("abcd");
+//!    nvTT.print_avg_stats();
+class nvtxTimeTable{
+public:
+    std::stack<std::pair<std::string, hsClock::time_point>> timeStack;
+    std::map<std::string, microSec> timeTable;
+    std::vector<std::string> tagOrder;
+    nvtxTimeTable() = default; // 默认构造函数
+    
+    void time_push(const std::string& tag){
+      if(timeTable.find(tag) == timeTable.end()){
+        timeTable[tag] = microSec(0);
+        tagOrder.push_back(tag);
+      }
+      cudaDeviceSynchronize();
+      timeStack.push({tag, hsClock::now()});
+    };
+
+    void time_pop(const std::string& tag){
+        if(timeStack.empty()){
+            printf("[nvTT] empty error timeTable.\n");
+            return; 
+        }
+        cudaDeviceSynchronize();
+        microSec ts = std::chrono::
+            duration_cast<microSec>(hsClock::now()- timeStack.top().second);
+        timeTable[timeStack.top().first] += ts;
+        timeStack.pop();     
+    };
+
+    void print_avg_stats(){
+        printf("=== AVG (us):\n");
+        bool first = true;
+        for(auto& tag : tagOrder){
+            if(!first) printf(", ");
+             printf("%s", tag.c_str());
+            first = false;
+        }
+        printf(": ");
+        first = true;
+        for(auto& tag : tagOrder){
+            if(!first) printf(", ");
+            printf("%ld", timeTable[tag].count());
+            first = false;
+        }
+        printf("\n");
+    };
+};
+extern nvtxTimeTable nvTT;
+
+//!
+//! \class memoryProfiler
+//!
+//! \brief needed: #include <nvml.h>
+//!
+class memoryProfiler
+{
+private:
+    nvmlDevice_t device;
+    int gpu_id = 0;
+    std::vector<std::pair<std::string, float>> memoryTable;
+public:
+    memoryProfiler(int device_id=0): gpu_id(device_id){
+        nvmlInit();
+        nvmlDeviceGetHandleByIndex(gpu_id, &device);
+    };
+    ~memoryProfiler() {
+        nvmlShutdown();
+    }
+    
+    // 入口名称建议 afOP, 即表示 OP 完成后的显存状态
+    void mem_push(const std::string& tag) {
+        nvmlMemory_t mem_info;
+        nvmlDeviceGetMemoryInfo(device, &mem_info);
+        memoryTable.push_back({tag, mem_info.used / (1024 * 1024)});// MB
+    }
+    void print_mem_info(){
+        std::cout << "\n" << std::string(50, '=') << std::endl;
+        std::cout << "Memory Usage Summary:" << std::endl;
+        std::cout << std::string(50, '=') << std::endl;
+
+        int n = memoryTable.size();
+        for(int i=0;i<n;i++){
+            if (i > 0) {
+                float prev = memoryTable[i-1].second;
+                float cur = memoryTable[i].second;
+                float delta = cur - prev;
+                char sign = delta >= 0 ? '+' : ' ';
+                
+                std::cout << std::left << std::setw(20) << std::setfill(' ') << memoryTable[i].first << ": "
+                          << std::right << std::fixed << std::setprecision(4) 
+                          << std::setw(8) << cur << " MB ("
+                          << sign << std::setw(6) << std::fixed << std::setprecision(2) 
+                          << delta << " MB)" << std::endl;
+            } else {
+                std::cout << std::left << std::setw(20) << std::setfill(' ') << memoryTable[i].first << ": "
+                          << std::right << std::fixed << std::setprecision(4) 
+                          << std::setw(8) << memoryTable[i].second << " MB" << std::endl;
+            }
+        }
+    }
+};
+extern memoryProfiler mP;
+#endif
 }  // namespace base
 #endif  // KUIPER_INCLUDE_BASE_BASE_H_
