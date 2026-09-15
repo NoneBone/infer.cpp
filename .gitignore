@@ -1,5 +1,13 @@
+# dict
 Qwen/Qwen3-0.6B
 build/
 tools/
+log/
+
+# file
+docs/0*.md
 *.pth
 *.so
+*.json
+*.bin
+.vscode/launch.json

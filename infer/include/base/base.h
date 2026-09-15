@@ -234,7 +234,7 @@ public:
              printf("%s", tag.c_str());
             first = false;
         }
-        printf(": ");
+        printf(": \n");
         first = true;
         for(auto& tag : tagOrder){
             if(!first) printf(", ");

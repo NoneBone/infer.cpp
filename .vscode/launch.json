@@ -20,7 +20,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/test/test_unit",
       "args": [
-        "--gtest_filter=test_add_cu.*"
+        "--gtest_filter=test_qwen3.*" // test_*_cu.
       ],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,
@@ -30,7 +30,7 @@
       "preLaunchTask": "base test_unit"
     },
     {
-      "name": "debug qwen3_infer",
+      "name": "qwen3_infer",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build/demo/qwen3_infer",

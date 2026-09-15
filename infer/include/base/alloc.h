@@ -33,7 +33,17 @@ public:
     void* allocate(size_t byte_size) const override;// 函数签名
     void release(void* ptr) const override;// override 表示这个函数必须重写基类虚函数
 };
-// struct CudaMemoryBuffer {} // TODO
+
+struct CudaMemoryBuffer {
+    void* data;
+    size_t byte_size;
+    bool busy;
+
+    CudaMemoryBuffer() = default;
+    CudaMemoryBuffer(void* data, size_t byte_size, bool busy_now) : 
+                data(data), byte_size(byte_size), busy(busy_now){};
+};
+
 class CUDADeviceAllocator : public DeviceAllocator {
 public:
     explicit CUDADeviceAllocator();
@@ -41,7 +51,10 @@ public:
     void* allocate(size_t byte_size) const override;
     void release(void* ptr) const override;
 private:
- // TODO: 当前空闲内存
+    bool enabled_ = true;
+    mutable std::map<int, size_t> no_busy_cnt_;// ISSUE
+    mutable std::map<int, std::vector<CudaMemoryBuffer>> big_buffers_map_;
+    mutable std::map<int, std::vector<CudaMemoryBuffer>> small_buffers_map_;
 };
 // factory entry
 class CPUDeviceAllocatorFactory{
@@ -66,9 +79,6 @@ public:
     };
 private:
     static std::shared_ptr<CUDADeviceAllocator> instance;     // instance 指针销毁时, CPUDeviceAllocator 对象自动释放
-    // TODO: 验证性能收益
-    // mutable std::map<int, std::vector<CudaMemoryBuffer>> big_buffers_map_;
-    // mutable std::map<int, std::vector<CudaMemoryBuffer>> cuda_buffers_map_;
 };
 } // namespace base
 #endif
