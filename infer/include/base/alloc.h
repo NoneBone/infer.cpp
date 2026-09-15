@@ -20,7 +20,6 @@ public:
     virtual void memcpy(const void *src_ptr, void *dst_ptr, size_t byte_size,
                         MemcpyKind memcpy_kind = MemcpyKind::kMemcpyCPU2CPU, 
                         void *stream = nullptr, bool need_sync = false) const;
-// TODO
   virtual void memset_zero(void* ptr, size_t byte_size, void* stream, bool need_sync = false);
 
 private:
@@ -67,6 +66,9 @@ public:
     };
 private:
     static std::shared_ptr<CUDADeviceAllocator> instance;     // instance 指针销毁时, CPUDeviceAllocator 对象自动释放
+    // TODO: 验证性能收益
+    // mutable std::map<int, std::vector<CudaMemoryBuffer>> big_buffers_map_;
+    // mutable std::map<int, std::vector<CudaMemoryBuffer>> cuda_buffers_map_;
 };
 } // namespace base
 #endif

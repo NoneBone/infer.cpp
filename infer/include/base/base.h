@@ -6,15 +6,22 @@
 
 #define ANA_MEM_TIME 1
 #ifdef ANA_MEM_TIME
+// time
 #include <iostream>
 #include <chrono>
 #include <algorithm>
 #include <chrono>
 #include <stack>
 #include <map>
-
+// vdram
+#include <cuda_runtime_api.h>
+#include <cuda.h>
 #include <iomanip>
 #include <nvml.h> // -lnvidia-ml
+// dram
+#include <fstream>
+#include <sstream>
+
 using hsClock = std::chrono::high_resolution_clock;
 using microSec = std::chrono::microseconds;
 #endif
@@ -203,6 +210,7 @@ public:
         timeTable[tag] = microSec(0);
         tagOrder.push_back(tag);
       }
+      cudaDeviceSynchronize();
       timeStack.push({tag, hsClock::now()});
     };
 
@@ -211,6 +219,7 @@ public:
             printf("[nvTT] empty error timeTable.\n");
             return; 
         }
+        cudaDeviceSynchronize();
         microSec ts = std::chrono::
             duration_cast<microSec>(hsClock::now()- timeStack.top().second);
         timeTable[timeStack.top().first] += ts;
@@ -237,6 +246,62 @@ public:
 };
 extern nvtxTimeTable nvTT;
 
+
+class hostMemoryProfiler {
+private:
+public:
+    std::vector<std::pair<std::string, float>> memoryTable;
+
+    float current_rss_mb() const {
+        std::ifstream file("/proc/self/status");
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.rfind("VmRSS:", 0) == 0) {
+                std::istringstream iss(line.substr(6));
+                size_t value_kb = 0;
+                iss >> value_kb;
+                return static_cast<float>(value_kb) / 1024.0f;
+            }
+        }
+
+        return 0.0f;
+    }
+
+    void mem_push(const std::string& tag) {
+        memoryTable.push_back({tag, current_rss_mb()});
+    }
+
+    void print_mem_info() const {
+        std::cout << "\n"
+                  << std::string(50, '=') << "\n"
+                  << "Host Memory Usage Summary:\n"
+                  << std::string(50, '=') << "\n";
+
+        for (size_t i = 0; i < memoryTable.size(); ++i) {
+            const auto& [tag, current] = memoryTable[i];
+
+            std::cout << std::left << std::setw(20)
+                      << std::setfill(' ') << tag << ": "
+                      << std::right << std::fixed << std::setprecision(4)
+                      << std::setw(8) << current << " MB";
+
+            if (i > 0) {
+                float previous = memoryTable[i - 1].second;
+                float delta = current - previous;
+
+                std::cout << " ("
+                          << (delta >= 0 ? '+' : ' ')
+                          << std::setw(6) << std::fixed
+                          << std::setprecision(2) << delta << " MB)";
+            }
+
+            std::cout << std::endl;
+        }
+    }
+};
+
+// extern hostMemoryProfiler hMP;
+
 //!
 //! \class memoryProfiler
 //!
@@ -247,9 +312,11 @@ class memoryProfiler
 private:
     nvmlDevice_t device;
     int gpu_id = 0;
+    bool en_cpu = false;
     std::vector<std::pair<std::string, float>> memoryTable;
+    hostMemoryProfiler hMP;
 public:
-    memoryProfiler(int device_id=0): gpu_id(device_id){
+    memoryProfiler(bool en_host = false, int device_id=0): gpu_id(device_id), en_cpu(en_host){
         nvmlInit();
         nvmlDeviceGetHandleByIndex(gpu_id, &device);
     };
@@ -262,6 +329,9 @@ public:
         nvmlMemory_t mem_info;
         nvmlDeviceGetMemoryInfo(device, &mem_info);
         memoryTable.push_back({tag, mem_info.used / (1024 * 1024)});// MB
+        if(en_cpu){
+          hMP.mem_push(tag);
+        }
     }
     void print_mem_info(){
         std::cout << "\n" << std::string(50, '=') << std::endl;
@@ -287,9 +357,13 @@ public:
                           << std::setw(8) << memoryTable[i].second << " MB" << std::endl;
             }
         }
+        if(en_cpu){
+          hMP.print_mem_info();
+        }
     }
 };
-extern nvtxTimeTable mP;
+extern memoryProfiler mP;
+
 #endif
 
 

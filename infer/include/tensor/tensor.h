@@ -62,7 +62,7 @@ public:
     int32_t dims_size() const;
     // TODO
     // const std::vector<int32_t>& dims() const;
-//   std::vector<size_t> strides() const;
+    // std::vector<size_t> strides() const;
 
 
 //   void reset(base::DataType data_type, const std::vector<int32_t>& dims);
