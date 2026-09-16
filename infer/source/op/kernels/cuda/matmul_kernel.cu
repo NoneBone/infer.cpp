@@ -3,74 +3,48 @@
 namespace kernel
 {
 template <int THREAD_PER_BLOCK, int ROW_PER_BLOCK>
-__global__ void matmul_kernel_cu_fp32(const float* input, const float* weight, float* output, int M,
+__global__ void matmul_kernel_cu_fp16(const __half* input, const __half* weight, __half* output, int M,
                                       int K) {
-  __shared__ float sdata[THREAD_PER_BLOCK];
-  unsigned int tid = threadIdx.x;
-
-  int start_row = blockIdx.x * ROW_PER_BLOCK;
-  int end_row = start_row + ROW_PER_BLOCK;
-  if (start_row >= K) {
+  // input:  [K]
+  // weight: [M, K]，按 row-major 存储（MatmulLayer 约定为 [output, input]）
+  // output: [M]
+  // 每个线程负责一个输出元素，使用 FP32 做累加，最后转回 FP16。
+  const int output_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (output_idx >= M) {
     return;
   }
 
-  constexpr int pack_size = 4;
-  const int pack_num = M / pack_size;
-  const int pack_off = pack_size * pack_num;
-
-#pragma unroll
-  for (int p = start_row; p < end_row; ++p) {
-    sdata[tid] = 0;
-    int row_offset = p * M;
-    float4* input_float4_ptr = (float4*)input;
-    float4* weight_float4_ptr = (float4*)(weight + row_offset);
-
-#pragma unroll
-    for (int i = tid; i < pack_num; i += blockDim.x) {
-      float4 input_float4 = *(input_float4_ptr + i);
-      float4 weight_float4 = *(weight_float4_ptr + i);
-      float part_sum = input_float4.x * weight_float4.x + input_float4.y * weight_float4.y +
-                       input_float4.z * weight_float4.z + input_float4.w * weight_float4.w;
-      sdata[tid] += part_sum;
-    }
-
-    for (int i = pack_off + tid; i < M; i += blockDim.x) {
-      sdata[tid] += input[i] * weight[row_offset + i];
-    }
-
-    __syncthreads();
-
-    using BlockReduce = cub::BlockReduce<float, THREAD_PER_BLOCK>;
-    __shared__ typename BlockReduce::TempStorage temp;
-    float part_sum = BlockReduce(temp).Sum(sdata[tid]);
-    __syncthreads();
-
-    if (tid == 0) {
-      output[p] = part_sum;
-    }
-    __syncthreads();
+  float sum = 0.0f;
+  for (int k = 0; k < K; ++k) {
+    const float input_value = __half2float(input[k]);
+    const float weight_value = __half2float(weight[output_idx * K + k]);
+    sum += input_value * weight_value;
   }
+
+  output[output_idx] = __float2half(sum);
 }
 
 void matmul_kernel_cu(const tensor::Tensor& input, const tensor::Tensor& weight,
                       const tensor::Tensor& output, const float scale, const CudaConfig* config) {
+  UNUSED(scale);
   CHECK(input.is_empty() == false && input.dims_size() <= 2);
   CHECK(input.device_type() == base::DeviceType::kDeviceCUDA);
 
   CHECK(weight.is_empty() == false && weight.dims_size() == 2);
   CHECK(weight.device_type() == base::DeviceType::kDeviceCUDA);
-  const int32_t K = weight.get_dim(0);  // row
-  const int32_t M = weight.get_dim(1);  // col
-  int packet_size = 4;
-  // CHECK_EQ(M % packet_size, 0);
+  const int32_t M = weight.get_dim(0);  // output rows
+  const int32_t K = weight.get_dim(1);  // input columns
+  CHECK_EQ(K, input.get_dim(0));
+  CHECK_EQ(output.get_dim(0), M);
 
-  CHECK_EQ(M, input.get_dim(0));
+  constexpr int threads = 128;
+  const int blocks = (M + threads - 1) / threads;
   if (config && config->stream) {
-    matmul_kernel_cu_fp32<128, 1><<<K, 128, 0, config->stream>>>(
-        input.ptr<float>(), weight.ptr<float>(), const_cast<float*>(output.ptr<float>()), M, K);
+    matmul_kernel_cu_fp16<128, 1><<<blocks, threads, 0, config->stream>>>(
+        input.ptr<__half>(), weight.ptr<__half>(), const_cast<__half*>(output.ptr<__half>()), M, K);
   } else {
-    matmul_kernel_cu_fp32<128, 1><<<K, 128>>>(input.ptr<float>(), weight.ptr<float>(),
-                                              const_cast<float*>(output.ptr<float>()), M, K);
+    matmul_kernel_cu_fp16<128, 1><<<blocks, threads>>>(input.ptr<__half>(), weight.ptr<__half>(),
+                                              const_cast<__half*>(output.ptr<__half>()), M, K);
   }
 }
 

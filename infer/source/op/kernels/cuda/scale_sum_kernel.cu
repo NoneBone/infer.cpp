@@ -3,7 +3,7 @@
 #include "base/base.h"
 
 namespace kernel {
-__global__ void scale_sum_kernel_impl(const float* value, const float* scale, float* output,
+__global__ void scale_sum_kernel_impl(const __half* value, const __half* scale, __half* output,
                                       int t, int size, int stride) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= size) {
@@ -12,9 +12,9 @@ __global__ void scale_sum_kernel_impl(const float* value, const float* scale, fl
 
   float sum = 0.f;
   for (int j = 0; j <= t; ++j) {
-    sum += value[j * stride + idx] * scale[j];
+    sum += __half2float(value[j * stride + idx]) * __half2float(scale[j]);
   }
-  output[idx] = sum;
+  output[idx] = __float2half(sum);
 }
 
 void scale_sum_kernel_cu(const tensor::Tensor& value, const tensor::Tensor& scale,
@@ -23,13 +23,13 @@ void scale_sum_kernel_cu(const tensor::Tensor& value, const tensor::Tensor& scal
   CHECK(!value.is_empty());
   CHECK(!scale.is_empty());
   CHECK(!output.is_empty());
-  CHECK(value.data_type() == base::DataType::kDataTypeFp32);
-  CHECK(scale.data_type() == base::DataType::kDataTypeFp32);
-  CHECK(output.data_type() == base::DataType::kDataTypeFp32);
+  CHECK(value.data_type() == base::DataType::kDataTypeFp16);
+  CHECK(scale.data_type() == base::DataType::kDataTypeFp16);
+  CHECK(output.data_type() == base::DataType::kDataTypeFp16);
 
-  const float* value_ptr = value.ptr<float>();
-  const float* scale_ptr = scale.ptr<float>();
-  float* output_ptr = const_cast<float*>(output.ptr<float>());
+  const __half* value_ptr = value.ptr<__half>();
+  const __half* scale_ptr = scale.ptr<__half>();
+  __half* output_ptr = const_cast<__half*>(output.ptr<__half>());
 
   const int thread_num = 256;
   const int block_num = CEIL(size, thread_num);

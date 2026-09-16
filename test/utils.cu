@@ -17,3 +17,21 @@ void set_value_cu(float* dst, int size, float val){
     cudaError_t state = cudaGetLastError();
     CHECK_EQ(state, cudaSuccess);
 }
+
+__global__ void set_value_fp16_kernel(__half* dst, int size, float val) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        dst[idx] = __float2half(val);
+    }
+}
+
+void set_value_cu_fp16(__half* dst, int size, float val) {
+    int block = 256;
+    int grid = (size + block - 1) / block;
+
+    set_value_fp16_kernel<<<grid, block>>>(dst, size, val);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(cudaGetErrorString(err));
+    }
+}

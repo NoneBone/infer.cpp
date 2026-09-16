@@ -149,7 +149,8 @@ void Tensor::to_cuda(cudaStream_t stream){
         size_t byte_size = this->byte_size();
         auto alloc = base::CUDADeviceAllocatorFactory::get_instance();
         auto buffer = std::make_shared<base::Buffer>(byte_size, alloc);
-        alloc->memcpy(buffer_->ptr(), buffer->ptr(), byte_size, base::MemcpyKind::kMemcpyCPU2CUDA);
+        alloc->memcpy(buffer_->ptr(), buffer->ptr(), byte_size,
+                      base::MemcpyKind::kMemcpyCPU2CUDA, stream);
         this->buffer_ = buffer;
     }else{
         LOG(INFO) << "Tensor is already on cuda.\n";

@@ -61,6 +61,7 @@ public:
     base::Status create_layers() override;
 
     void create_param_layers() override;
+    void create_param_layers_fp16();
 
     void create_nonparam_layers() override;
 

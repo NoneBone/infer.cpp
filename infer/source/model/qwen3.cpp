@@ -191,8 +191,9 @@ base::Status Qwen3Model::forward(const tensor::Tensor& input, const tensor::Tens
 
 void Qwen3Model::create_nonparam_layers() {
   CHECK(qwen_layers_ != nullptr);
+  const int32_t attn_dim = config_->head_num_ * config_->head_size_;
   qwen_layers_->rope_layer_ = std::make_shared<op::RoPELayer>(
-      device_type_, config_->dim_, config_->kv_dim_, config_->head_size_);
+      device_type_, attn_dim, config_->kv_dim_, config_->head_size_);
 
   qwen_layers_->mha_layer_ = std::make_shared<op::MultiHeadAttention>(
       device_type_, 0, config_->kv_mul_, config_->kv_dim_, config_->seq_len_, config_->head_num_,
@@ -214,7 +215,7 @@ void Qwen3Model::create_param_layers() {
   int32_t kv_dim = config_->kv_dim_;
   int hidden_dim = config_->hidden_dim_;
   auto cpu_device_type = base::DeviceType::kDeviceCPU;
-  float* weight_ptr = (float*)raw_model_data_->weight(pos);
+  __half* weight_ptr = (__half*)raw_model_data_->weight(pos);
 
   // rmsnorm attention attention, ffn, final
   for (int32_t i = 0; i < 2 * config_->layer_num_ + 1; ++i) {
@@ -321,6 +322,65 @@ void Qwen3Model::create_param_layers() {
   qwen_layers_->cls_layer_ = lm_head;
 }
 
+void Qwen3Model::create_param_layers_fp16() {
+  CHECK(qwen_layers_ != nullptr);
+  LOG(INFO) << "Loading Qwen3 FP16 model weights...";
+
+  size_t pos = 0;
+  const int32_t dim = config_->dim_;
+  const int32_t kv_dim = config_->kv_dim_;
+  const int32_t immediate_dim = config_->immediate_dim_;
+  const int32_t attn_dim = config_->head_num_ * config_->head_size_;
+  const int32_t vocab_size = config_->vocab_size_;
+  const auto cpu = base::DeviceType::kDeviceCPU;
+
+  auto add_norm = [&](int32_t size) {
+    auto layer = std::make_shared<op::RmsNormLayer>(device_type_, size);
+    layer->set_weight_fp16(0, {size}, raw_model_data_->weight(pos), cpu);
+    qwen_layers_->rmsnorm_layers_.push_back(layer);
+    pos += size;
+  };
+  for (int32_t i = 0; i < config_->layer_num_; ++i) add_norm(dim);
+  for (int32_t i = 0; i < config_->layer_num_; ++i) add_norm(dim);
+  add_norm(dim);
+
+  auto embedding = std::make_shared<op::EmbeddingLayer>(device_type_, dim, config_->seq_len_, vocab_size);
+  embedding->set_weight_fp16(0, {vocab_size, dim}, raw_model_data_->weight(pos), cpu);
+  qwen_layers_->emb_layer_ = embedding;
+  pos += static_cast<size_t>(vocab_size) * dim;
+
+  auto add_matmul = [&](std::vector<std::shared_ptr<op::Layer>>& layers,
+                        int32_t out_dim, int32_t in_dim) {
+    for (int32_t i = 0; i < config_->layer_num_; ++i) {
+      auto layer = std::make_shared<op::MatmulLayer>(device_type_, out_dim, in_dim, false);
+      layer->set_weight_fp16(0, {out_dim, in_dim}, raw_model_data_->weight(pos), cpu);
+      layers.push_back(layer);
+      pos += static_cast<size_t>(out_dim) * in_dim;
+    }
+  };
+  add_matmul(qwen_layers_->wq_layers_, attn_dim, dim);
+  add_matmul(qwen_layers_->wk_layers_, kv_dim, dim);
+  add_matmul(qwen_layers_->wv_layers_, kv_dim, dim);
+  add_matmul(qwen_layers_->wo_layers_, dim, attn_dim);
+  add_matmul(qwen_layers_->w1_layers_, immediate_dim, dim);
+  add_matmul(qwen_layers_->w2_layers_, dim, immediate_dim);
+  add_matmul(qwen_layers_->w3_layers_, immediate_dim, dim);
+
+  auto lm_head = std::make_shared<op::MatmulLayer>(device_type_, vocab_size, dim, false);
+  if (config_->is_shared_weight_) {
+    const size_t embedding_pos = static_cast<size_t>(2 * config_->layer_num_ + 1) * dim;
+    lm_head->set_weight_fp16(0, {vocab_size, dim}, raw_model_data_->weight(embedding_pos), cpu);
+  } else {
+    lm_head->set_weight_fp16(0, {vocab_size, dim}, raw_model_data_->weight(pos), cpu);
+    pos += static_cast<size_t>(vocab_size) * dim;
+  }
+  qwen_layers_->cls_layer_ = lm_head;
+
+  for (int32_t i = 0; i < config_->layer_num_; ++i) add_norm(config_->head_size_);
+  for (int32_t i = 0; i < config_->layer_num_; ++i) add_norm(config_->head_size_);
+  LOG(INFO) << "Qwen3 FP16 model loaded successfully. Total FP16 elements: " << pos;
+}
+
 void Qwen3Model::init_mem() {
   std::shared_ptr<base::DeviceAllocator> alloc;
   if (device_type_ == base::DeviceType::kDeviceCPU) {
@@ -340,7 +400,7 @@ void Qwen3Model::init_mem() {
       base::CUDADeviceAllocatorFactory::get_instance();
   // 预分配缓冲区，所有中间计算结果都复用这些预分配的缓冲区，避免推理过程中的动态内存分配。
   tensor::Tensor input_tokens(base::DataType::kDataTypeInt32, 1, true, alloc_cpu);
-  tensor::Tensor input_embeddings(base::DataType::kDataTypeFp32, 1, config_->hidden_dim_, true,
+  tensor::Tensor input_embeddings(base::DataType::kDataTypeFp16, 1, config_->dim_, true,
                                   alloc);
   tensor::Tensor sin_cache(base::DataType::kDataTypeFp32, config_->head_size_ * config_->seq_len_,
                            true, alloc);
@@ -353,31 +413,33 @@ void Qwen3Model::init_mem() {
   CHECK(insert_buffer(ModelBufferType::kInputTokens, input_tokens));
   CHECK(insert_buffer(ModelBufferType::kInputEmbeddings, input_embeddings));
 
-  tensor::Tensor rms_output(base::DataType::kDataTypeFp32, config_->hidden_dim_, true, alloc);
-  tensor::Tensor out_mha(base::DataType::kDataTypeFp32, config_->dim_, true, alloc);
+  tensor::Tensor rms_output(base::DataType::kDataTypeFp16, config_->dim_, true, alloc);
+  tensor::Tensor out_mha(base::DataType::kDataTypeFp16,
+                         config_->head_num_ * config_->head_size_, true, alloc);
 
   CHECK(insert_buffer(ModelBufferType::kOutputRMSNorm, rms_output));
   CHECK(insert_buffer(ModelBufferType::kOutputMHA, out_mha));
   CHECK(insert_buffer(ModelBufferType::kW2Output, rms_output));
   CHECK(insert_buffer(ModelBufferType::kFFNRMSNorm, rms_output));
 
-  tensor::Tensor w1_output(base::DataType::kDataTypeFp32, config_->immediate_dim_, true, alloc);
-  tensor::Tensor w3_output(base::DataType::kDataTypeFp32, config_->immediate_dim_, true, alloc);
+  tensor::Tensor w1_output(base::DataType::kDataTypeFp16, config_->immediate_dim_, true, alloc);
+  tensor::Tensor w3_output(base::DataType::kDataTypeFp16, config_->immediate_dim_, true, alloc);
 
   CHECK(insert_buffer(ModelBufferType::kW1Output, w1_output));
   CHECK(insert_buffer(ModelBufferType::kW3Output, w3_output));
 
   // kv cache
-  tensor::Tensor key_cache(base::DataType::kDataTypeFp32, config_->layer_num_, config_->seq_len_,
+  tensor::Tensor key_cache(base::DataType::kDataTypeFp16, config_->layer_num_, config_->seq_len_,
                            config_->kv_dim_, true, alloc);
-  tensor::Tensor value_cache(base::DataType::kDataTypeFp32, config_->layer_num_, config_->seq_len_,
+  tensor::Tensor value_cache(base::DataType::kDataTypeFp16, config_->layer_num_, config_->seq_len_,
                              config_->kv_dim_, true, alloc);
 
   CHECK(insert_buffer(ModelBufferType::kKeyCache, key_cache));
   CHECK(insert_buffer(ModelBufferType::kValueCache, value_cache));
 
   // Wq query output
-  tensor::Tensor query(base::DataType::kDataTypeFp32, config_->dim_, true, alloc);
+  tensor::Tensor query(base::DataType::kDataTypeFp16,
+                       config_->head_num_ * config_->head_size_, true, alloc);
   CHECK(insert_buffer(ModelBufferType::kQuery, query));
 
   // Pos tensor
@@ -385,14 +447,14 @@ void Qwen3Model::init_mem() {
   CHECK(insert_buffer(ModelBufferType::kInputPos, pos_tensor));
 
   // Attention output
-  tensor::Tensor attn(base::DataType::kDataTypeFp32, config_->head_num_, config_->seq_len_, true,
+  tensor::Tensor attn(base::DataType::kDataTypeFp16, config_->head_num_, config_->seq_len_, true,
                       alloc);
   CHECK(insert_buffer(ModelBufferType::kScoreStorage, attn));
-  tensor::Tensor attn_output(base::DataType::kDataTypeFp32, config_->hidden_dim_, true, alloc);
+  tensor::Tensor attn_output(base::DataType::kDataTypeFp16, config_->dim_, true, alloc);
   CHECK(insert_buffer(ModelBufferType::kAttnOutput, attn_output));
 
   // final forward output
-  tensor::Tensor forward_output(base::DataType::kDataTypeFp32, config_->vocab_size_, true, alloc);
+  tensor::Tensor forward_output(base::DataType::kDataTypeFp16, config_->vocab_size_, true, alloc);
   if (device_type_ == base::DeviceType::kDeviceCUDA) {
     tensor::Tensor forward_output_cpu(base::DataType::kDataTypeFp32, config_->vocab_size_, true,
                                       alloc_cpu);
@@ -409,7 +471,7 @@ base::Status Qwen3Model::create_layers() {
   }
 
   if (!is_quant_model_) {
-    create_param_layers();
+    create_param_layers_fp16();
   } else {
     return error::FunctionNotImplement("");
   }
@@ -620,7 +682,7 @@ op::EmbeddingOutput Qwen3Model::embedding(const std::vector<int>& tokens) const 
   auto input_embeddings = get_buffer(ModelBufferType::kInputEmbeddings);
   if (input_tokens.size() != tokens.size()) {
     input_tokens.reshape({static_cast<int32_t>(tokens.size())});
-    input_embeddings.reshape({static_cast<int32_t>(tokens.size()), config_->hidden_dim_});
+    input_embeddings.reshape({static_cast<int32_t>(tokens.size()), config_->dim_});
   }
   for (int32_t i = 0; i < tokens.size(); ++i) {
     input_tokens.index<int32_t>(i) = tokens.at(i);
@@ -647,11 +709,11 @@ tensor::Tensor Model::fill_input(const tensor::Tensor& pos_tensor,
   if (is_prompt) {
     index = pos;
   }
-  const auto* emb_ptr = input_embeddings.ptr<float>(index * config_->hidden_dim_);
+  const auto* emb_ptr = input_embeddings.ptr<__half>(index * config_->dim_);
   std::shared_ptr<base::Buffer> input_emb_buffer = std::make_shared<base::Buffer>(
-      config_->hidden_dim_ * sizeof(float), nullptr,
+      config_->dim_ * sizeof(__half), nullptr,
       const_cast<void*>(static_cast<const void*>(emb_ptr)), true);
-  tensor::Tensor input(base::DataType::kDataTypeFp32, config_->hidden_dim_);
+  tensor::Tensor input(base::DataType::kDataTypeFp16, config_->dim_);
 
   input.assign(input_emb_buffer);
   input.set_device_type(device_type_);
@@ -682,7 +744,7 @@ void Qwen3Model::cls_logits(const tensor::Tensor& input) const {
 
 int32_t Qwen3Model::post_processing(const tensor::Tensor& pos, bool is_prompt) const {
   tensor::Tensor forward_output = get_buffer(ModelBufferType::kForwardOutput);
-  const float* forward_logits = forward_output.ptr<float>();
+  const __half* forward_logits = forward_output.ptr<__half>();
 
   int32_t next = 0;
   if (is_prompt) {

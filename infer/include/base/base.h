@@ -3,7 +3,7 @@
 #include "glog/logging.h"
 #include <cstring>
 #include <string>
-
+#include "cuda_fp16.h"
 #define ANA_MEM_TIME 1
 #ifdef ANA_MEM_TIME
 // time
@@ -70,6 +70,7 @@ enum class DataType : uint8_t {
     kDataTypeFp32 = 1,
     kDataTypeInt8 = 2,
     kDataTypeInt32 = 3,
+    kDataTypeFp16 = 4,
 };
 
 enum class MemcpyKind{
@@ -98,6 +99,8 @@ inline size_t DataTypeSize(DataType data_type) {
       return sizeof(int8_t);
     } else if (data_type == DataType::kDataTypeInt32) {
       return sizeof(int32_t);
+    } else if (data_type == DataType::kDataTypeFp16) {
+        return 2;
     } else {
       return 0;
     }

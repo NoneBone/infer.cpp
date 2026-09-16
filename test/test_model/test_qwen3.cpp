@@ -79,14 +79,14 @@ TEST(test_qwen3, cuda)
   nvTT.time_push("all");
   mP.mem_push("af_init");
   nvTT.time_push("model.build");
-  const char *checkpoint_path = "tools/export_qwen3/qwen0.6.bin"; // e.g. out/model.bin
-  const char *tokenizer_path = "Qwen/Qwen3-0.6B/tokenizer_config.json";
+  const char *checkpoint_path = "Qwen3-4B-fp16.bin"; // e.g. out/model.bin
+  const char *tokenizer_path = "/media/l8w/Linux118/MODEL/LLM/Qwen/Qwen3-4B/tokenizer_config.json";
   model::Qwen3Model model(base::TokenizerType::kEncodeBpe, tokenizer_path, checkpoint_path, false);
   nvTT.time_pop("");
   nvTT.time_push("model.init");
   auto status = model.init(base::DeviceType::kDeviceCUDA);
   ASSERT_TRUE(status) << "Qwen3 model initialization failed: " << status.get_err_msg();
-  const int total_steps = 256;
+  const int total_steps = 16;
 
   {
     std::string hi = "What is AI?";

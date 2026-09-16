@@ -17,6 +17,7 @@ struct EmbeddingOutput {
 
 class EmbeddingLayer : public LayerParam {
  public:
+  // Qwen3 embedding 权重和输出均为 FP16。
   explicit EmbeddingLayer(base::DeviceType device_type, int32_t dim, int32_t seq_len,
                           int32_t vocab_size);
 

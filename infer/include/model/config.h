@@ -1,6 +1,7 @@
 #ifndef INFER_INCLUDE_MODEL_CONFIG_H_
 #define INFER_INCLUDE_MODEL_CONFIG_H_
 // #include <unistd.h>
+#include "cuda_fp16.h"
 #include <cstddef>
 #include <cstdint>
 namespace model
@@ -29,7 +30,9 @@ struct RawModelData {
 struct RawModelDataFp32 : RawModelData {
   const void* weight(size_t offset) const override;
 };
-
+struct RawModelDataFp16 : RawModelData {
+  const void* weight(size_t offset) const override;
+};
 struct RawModelDataInt8 : RawModelData {
   const void* weight(size_t offset) const override;
 };

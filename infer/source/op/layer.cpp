@@ -29,7 +29,7 @@ base::DeviceType BaseLayer::device_type() const { return device_type_; }
 void BaseLayer::set_device_type(base::DeviceType device_type) { device_type_ = device_type; }
 
 Layer::Layer(base::DeviceType device_type, LayerType layer_type, std::string layer_name)
-    : BaseLayer(device_type, layer_type, base::DataType::kDataTypeFp32, std::move(layer_name)) {}
+    : BaseLayer(device_type, layer_type, base::DataType::kDataTypeFp16, std::move(layer_name)) {}
 
     
 base::Status Layer::init() { return base::error::Success(); }
@@ -165,7 +165,7 @@ base::Status LayerParam::set_weight(int32_t idx, const std::vector<int32_t>& dim
   CHECK_LT(idx, weights_.size());
   CHECK_NE(weight_ptr, nullptr);
 
-  size_t size = std::accumulate(dims.begin(), dims.end(), sizeof(float), std::multiplies<>());
+  size_t size = std::accumulate(dims.begin(), dims.end(), sizeof(__half), std::multiplies<>());
   std::shared_ptr<base::Buffer> buffer =
       std::make_shared<base::Buffer>(size, nullptr, const_cast<void*>(weight_ptr), true);
   if (device_type != base::DeviceType::kDeviceUnknown) {
@@ -173,7 +173,7 @@ base::Status LayerParam::set_weight(int32_t idx, const std::vector<int32_t>& dim
   }
 
   if (!is_quant_) {
-    tensor::Tensor weight(base::DataType::kDataTypeFp32, dims);
+    tensor::Tensor weight(base::DataType::kDataTypeFp16, dims);
     weight.set_device_type(device_type);
     CHECK(weight.assign(buffer));
     weights_.at(idx) = weight;
@@ -194,6 +194,13 @@ base::Status LayerParam::set_weight(int32_t idx, const std::vector<int32_t>& dim
   }
 
   return base::error::Success();
+}
+
+base::Status LayerParam::set_weight_fp16(int32_t idx, const std::vector<int32_t>& dims,
+                                          const void* weight_ptr,
+                                          base::DeviceType device_type) {
+  // 当前非量化权重路径已经统一使用 FP16；保留独立接口以匹配 Qwen3 FP16 文件布局。
+  return set_weight(idx, dims, weight_ptr, device_type);
 }
 
 base::Status Layer::check_tensor(const tensor::Tensor& tensor, base::DeviceType device_type,
@@ -217,7 +224,7 @@ base::Status Layer::check_tensor(const tensor::Tensor& tensor, base::DeviceType 
 base::Status LayerParam::set_weight(int32_t idx, const tensor::Tensor& weight) {
   CHECK_GE(idx, 0);
   CHECK_LT(idx, weights_.size());
-  CHECK(weight.data_type() == base::DataType::kDataTypeFp32);
+  CHECK(weight.data_type() == base::DataType::kDataTypeFp16);
   if (!weight.is_empty()) {
     CHECK(weight.device_type() == device_type_);
   }

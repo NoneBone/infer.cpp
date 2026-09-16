@@ -3,13 +3,14 @@
 #include <cstddef>
 #include <cstdint>
 #include "base/base.h"
+#include <cuda_fp16.h>
 
 namespace sampler {
 class Sampler {
  public:
   explicit Sampler(base::DeviceType device_type) : device_type_(device_type) {}
 
-  virtual size_t sample(const float* logits, size_t size, void* stream = nullptr) = 0;
+  virtual size_t sample(const __half* logits, size_t size, void* stream = nullptr) = 0;
 
  protected:
   base::DeviceType device_type_;
@@ -19,7 +20,7 @@ class ArgmaxSampler : public Sampler {
  public:
   explicit ArgmaxSampler(base::DeviceType device_type) : Sampler(device_type) {}
 
-  size_t sample(const float* logits, size_t size, void* stream) override;
+  size_t sample(const __half* logits, size_t size, void* stream) override;
 };
 }  // namespace sampler
 #endif  // INFER_SAMPLER_H

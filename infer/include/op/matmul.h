@@ -6,6 +6,7 @@ namespace op
 {
 class MatmulLayer : public LayerParam{
 public:
+    // 非量化 Qwen3 路径使用 FP16 Tensor；kernel 内部使用 FP32 累加。
     explicit MatmulLayer(base::DeviceType device_type, int32_t dim0, int32_t dim1, 
         bool is_quant = false, bool has_bias = false);
     base::Status check() const override;

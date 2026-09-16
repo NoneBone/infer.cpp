@@ -1,8 +1,36 @@
-# roadmap
+# infer.cu
 
-1. Low-level component testing: buffer, tensor
-2. Operator unit tests: linear, attn, norm
-3. LLM built from scratch, the smallest unit of autoregressive inference, supports LLM: Qwen3
-4. Diffusion: Handcrafted from scratch, the smallest unit of pipeline, supports Diffusion: Flux1
-5. A comparison of the performance of diff-svdq's manually implemented svdquant quantization inference with Nunchaku.
-6. A manually developed ATTN backend using diff-fa2, compared to the flash-infer backend.
+## start
+
+### 1. install
+
+```shell
+rm -rf build
+cmake -S . -B build -DUSE_CPM=ON -DQWEN3_SUPPORT=ON
+cmake --build build -j16
+```
+
+### 2. infer
+
+```sh
+python tools/export_qwen3/export_qwen3-fp16.py \
+		Qwen3-4B-fp16.bin \
+		--dtype fp16 --hf /media/l8w/Linux118/MODEL/LLM/Qwen/Qwen3-4B
+
+./build/demo/qwen3_infer \
+    Qwen3-4B-fp16.bin \
+    /media/l8w/Linux118/MODEL/LLM/Qwen/Qwen3-4B/tokenizer.json
+				 # \
+    # --stream --max-tokens 1024 --interactive
+		# --benchmark
+		# --benchmark-decode-tokens 1024
+		# --attnOpt true
+		# --gemmOpt true 
+		# --rmsNorm true
+		# --ropeOpt true
+```
+
+### 3. exp
+```sh
+
+```

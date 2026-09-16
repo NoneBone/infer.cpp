@@ -87,7 +87,7 @@ base::Status MatmulLayer::set_bias(int32_t idx, int32_t& dim, const void* bias_p
   CHECK_LT(idx, bias_.size());
   CHECK_NE(bias_ptr, nullptr);
 
-  size_t size = dim * sizeof(float);
+  size_t size = dim * sizeof(__half);
   std::shared_ptr<base::Buffer> buffer =
       std::make_shared<base::Buffer>(size, nullptr, const_cast<void*>(bias_ptr), true);
   if (device_type != base::DeviceType::kDeviceUnknown) {
@@ -95,7 +95,7 @@ base::Status MatmulLayer::set_bias(int32_t idx, int32_t& dim, const void* bias_p
   }
 
   if (!is_quant_) {
-    tensor::Tensor bias(base::DataType::kDataTypeFp32, dim);
+    tensor::Tensor bias(base::DataType::kDataTypeFp16, dim);
     bias.set_device_type(device_type);
     CHECK(bias.assign(buffer));
     // LOG(INFO) << "bias:" << bias.index<float>(0);
