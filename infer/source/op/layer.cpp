@@ -1,6 +1,7 @@
 #include "op/layer.h"
 #include <numeric> // accumulate
 #include <cstdarg> // va_list ISSUE
+#include "kernels/cuda/matmul_kernel.cuh"
 
 namespace op
 {
@@ -308,6 +309,47 @@ const tensor::Tensor& LayerParam::get_weight(int32_t idx) const {
   CHECK_GE(idx, 0);
   CHECK_LT(idx, weights_.size());
   return weights_.at(idx);
+}
+
+// ==================== BatchedMatmulHelperLayer ====================
+
+BatchedMatmulHelperLayer::BatchedMatmulHelperLayer(base::DeviceType device_type)
+    : Layer(device_type, LayerType::kLayerMatmul, "BatchedMatmulHelper") {
+  reset_input_size(2);  // input, weight
+  reset_output_size(1); // output
+}
+
+base::Status BatchedMatmulHelperLayer::check() const {
+  return base::error::Success();
+}
+
+base::Status BatchedMatmulHelperLayer::forward() {
+  return base::error::InvalidArgument("Use forward(input, weight, output, batch_size, scale)");
+}
+
+base::Status BatchedMatmulHelperLayer::forward(const tensor::Tensor& input,
+                                               const tensor::Tensor& weight,
+                                               const tensor::Tensor& output,
+                                               int32_t batch_size, float scale) {
+  if (input.is_empty() || weight.is_empty() || output.is_empty()) {// HERE
+    return base::error::InvalidArgument("Empty tensors in batched matmul");
+  }
+  if (batch_size <= 0 || scale <= 0) {
+    return base::error::InvalidArgument("Invalid batch_size or scale");
+  }
+  
+  // Dispatch based on data types
+  if (input.data_type() == base::DataType::kDataTypeFp16 &&
+      output.data_type() == base::DataType::kDataTypeFp16 &&
+      weight.data_type() == base::DataType::kDataTypeFp16) {
+    // Pure FP16 path
+    kernel::batched_matmul_kernel_cu_pure_fp16(input, weight, output, batch_size, scale,
+                                               cuda_config_.get());
+  } else{
+    // ERROR;
+  }
+  
+  return base::error::Success();
 }
 
 } // namespace op

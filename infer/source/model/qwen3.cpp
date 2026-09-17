@@ -102,6 +102,10 @@ void Qwen3Layers::to_cuda(std::shared_ptr<kernel::CudaConfig> config) {
       rms_norm_layer->set_cuda_config(config);
     }
   }
+  if (batched_matmul_helper_layer_) {
+    batched_matmul_helper_layer_->set_cuda_config(config);
+    batched_matmul_helper_layer_->to_cuda();
+  }
 }
 
 Qwen3Model::Qwen3Model(base::TokenizerType tokenizer_type, std::string token_path,
@@ -203,6 +207,7 @@ void Qwen3Model::create_nonparam_layers() {
 
   qwen_layers_->swiglu_layer_ =
       std::make_shared<op::SwiGLULayer>(device_type_, config_->immediate_dim_);
+  qwen_layers_->batched_matmul_helper_layer_ = std::make_shared<op::BatchedMatmulHelperLayer>(device_type_);
 }
 
 void Qwen3Model::create_param_quant_layers() {}
@@ -595,6 +600,30 @@ void Qwen3Model::attention_qkv(int32_t layer_idx, const tensor::Tensor& pos_tens
   STATUS_CHECK(qwen_layers_->rope_layer_->forward(
       query, key, pos_tensor, get_buffer(ModelBufferType::kSinCache),
       get_buffer(ModelBufferType::kCosCache), tensor::Tensor{}));
+}
+
+void Qwen3Model::batched_attention_qkv(int32_t layer_idx, const tensor::Tensor& rms_out,
+                                const tensor::Tensor& query_out, const tensor::Tensor& key_out,
+                                const tensor::Tensor& value_out,
+                                int32_t seq_len, int32_t start_pos) const {
+  const auto& query_layer = qwen_layers_->wq_layers_.at(layer_idx);// HERE 关键 gemm
+  const auto& key_layer = qwen_layers_->wk_layers_.at(layer_idx);
+  const auto& value_layer = qwen_layers_->wv_layers_.at(layer_idx);
+
+  auto query_matmul = std::dynamic_pointer_cast<op::MatmulLayer>(query_layer);
+  auto key_matmul = std::dynamic_pointer_cast<op::MatmulLayer>(key_layer);
+  auto value_matmul = std::dynamic_pointer_cast<op::MatmulLayer>(value_layer);
+
+  CHECK_NE(query_matmul, nullptr) << "Query layer is not a MatmulLayer";
+  CHECK_NE(key_matmul, nullptr) << "Key layer is not a MatmulLayer";
+  CHECK_NE(value_matmul, nullptr) << "Value layer is not a MatmulLayer";
+
+  STATUS_CHECK(qwen_layers_->batched_matmul_helper_layer_->forward(
+      rms_out, query_matmul->get_weight(0), query_out, seq_len, 1.f));
+  STATUS_CHECK(qwen_layers_->batched_matmul_helper_layer_->forward(
+      rms_out, key_matmul->get_weight(0), key_out, seq_len, 1.f));
+  STATUS_CHECK(qwen_layers_->batched_matmul_helper_layer_->forward(
+      rms_out, value_matmul->get_weight(0), value_out, seq_len, 1.f));
 }
 
 base::Status Qwen3Model::predict(const tensor::Tensor& input, const tensor::Tensor& pos_tensor,

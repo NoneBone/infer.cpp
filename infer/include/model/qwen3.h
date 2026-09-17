@@ -40,6 +40,7 @@ struct Qwen3Layers{
     std::shared_ptr<op::Layer> cls_layer_;
     std::shared_ptr<op::Layer> emb_layer_;
 
+    std::shared_ptr<op::BatchedMatmulHelperLayer> batched_matmul_helper_layer_;
     void to_cuda(std::shared_ptr<kernel::CudaConfig> config);
 };
 
@@ -74,7 +75,12 @@ public:
     void feed_forward(int32_t layer_idx, const tensor::Tensor& input) const;
 
     void attention_qkv(int32_t layer_idx, const tensor::Tensor& pos_tensor) const;
-
+    
+    void batched_attention_qkv(int32_t layer_idx, const tensor::Tensor& rms_out,
+                                const tensor::Tensor& query_out, const tensor::Tensor& key_out,
+                                const tensor::Tensor& value_out,
+                                int32_t seq_len, int32_t start_pos) const;
+                                
     void cls_logits(const tensor::Tensor& input) const;
 
     int32_t post_processing(const tensor::Tensor& pos, bool is_prompt) const override;

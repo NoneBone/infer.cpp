@@ -188,5 +188,18 @@ class LayerParam : public Layer {
   tensor::Tensor scales_;
   std::vector<tensor::Tensor> weights_;
 };
+
+class BatchedMatmulHelperLayer : public Layer {
+ public:
+  explicit BatchedMatmulHelperLayer(base::DeviceType device_type);
+
+  base::Status check() const override;
+  base::Status forward() override;
+  
+  // Direct forward with explicit weight tensor
+  base::Status forward(const tensor::Tensor& input, const tensor::Tensor& weight,
+                       const tensor::Tensor& output, int32_t batch_size, float scale);
+};
+
 }  // namespace op
 #endif
