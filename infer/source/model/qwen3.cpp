@@ -11,8 +11,11 @@
 #include <op/swiglu.h>
 #include <sentencepiece_processor.h>
 #include <utility>
+#include <cstdlib>
 #include "../op/kernels/cpu/rope_kernel.h"
 #include "../op/kernels/cuda/rope_kernel.cuh"
+#include "../op/kernels/cuda/mha_kernel.cuh"
+#include "../op/kernels/kernels_interface.h"
 #include "base/tick.h"
 namespace model {
 
@@ -180,16 +183,328 @@ base::Status Qwen3Model::forward(const tensor::Tensor& input, const tensor::Tens
     return base::error::InternalError("Unsupported int8 quant in the cpu device");
   }
 
-  for (int32_t layer_idx = 0; layer_idx < config_->layer_num_; ++layer_idx) {
-    attention_rms(layer_idx, input);
-    // attention (wq wk wv @ input)
-    attention_qkv(layer_idx, pos_tensor);
-    // multi-head attention
-    attention_mha(layer_idx, pos_tensor);
-    // feed forward
-    feed_forward(layer_idx, input);
+  if (input.dims_size() == 2) {
+    if (std::getenv("QWEN3_FORCE_SEQUENTIAL_PREFILL") == nullptr) {
+      return prefill(input, input.get_dim(0), pos_tensor.index<int32_t>(0));
+    }
   }
-  cls_logits(input);
+
+  CHECK(pos_tensor.dims_size() == 1);
+
+  // Decode keeps the original single-token GEMV path.  A prompt is currently
+  // represented as [seq_len, hidden_dim].  The surrounding attention, RoPE,
+  // cache and FFN operators are still single-token operators, so process each
+  // row in order while preserving the complete prompt input and its position.
+  // This gives correct prefill state and leaves a single place to replace the
+  // row loop with a fully batched pipeline later.
+  const int32_t token_count = input.dims_size() == 2 ? input.get_dim(0) : 1;
+  const int32_t hidden_dim = config_->dim_;
+  CHECK_EQ(input.get_dim(input.dims_size() - 1), hidden_dim);
+  tensor::Tensor final_input;
+
+  for (int32_t token_idx = 0; token_idx < token_count; ++token_idx) {
+    tensor::Tensor token_input;
+    if (input.dims_size() == 1) {
+      token_input = input;
+    } else {
+      auto* token_ptr = const_cast<__half*>(input.ptr<__half>(
+          static_cast<size_t>(token_idx) * hidden_dim));
+      auto token_buffer = std::make_shared<base::Buffer>(
+          static_cast<size_t>(hidden_dim) * sizeof(__half), nullptr, token_ptr, true);
+      token_input = tensor::Tensor(base::DataType::kDataTypeFp16, hidden_dim);
+      CHECK(token_input.assign(token_buffer));
+      token_input.set_device_type(device_type_);
+    }
+    final_input = token_input;
+
+    tensor::Tensor token_pos = pos_tensor;
+    token_pos.index<int32_t>(0) = pos_tensor.index<int32_t>(0) + token_idx;
+    for (int32_t layer_idx = 0; layer_idx < config_->layer_num_; ++layer_idx) {
+      attention_rms(layer_idx, token_input);
+      attention_qkv(layer_idx, token_pos);
+      attention_mha(layer_idx, token_pos);
+      feed_forward(layer_idx, token_input);
+    }
+  }
+
+  // The final token's hidden state is stored in the existing single-token
+  // buffers and therefore produces the logits consumed by post_processing.
+  cls_logits(final_input);
+  return base::error::Success();
+}
+
+base::Status Qwen3Model::prefill(const tensor::Tensor& input, int32_t seq_len,
+                                  int32_t start_pos) const {
+  if (device_type_ != base::DeviceType::kDeviceCUDA) {
+    return base::error::InternalError("Prefill GEMM currently requires CUDA");
+  }
+  if (input.dims_size() != 2 || input.get_dim(0) != seq_len ||
+      input.get_dim(1) != config_->dim_ || seq_len <= 0 ||
+      start_pos < 0 || start_pos + seq_len > config_->seq_len_) {
+    return base::error::InvalidArgument("Invalid prefill input shape or position");
+  }
+
+  auto cuda_alloc = base::CUDADeviceAllocatorFactory::get_instance();
+  const int32_t dim = config_->dim_;
+  const int32_t attn_dim = config_->head_num_ * config_->head_size_;
+  const int32_t kv_dim = config_->kv_dim_;
+  const int32_t hidden_dim = config_->immediate_dim_;
+  const int32_t max_seq = config_->seq_len_;
+
+  tensor::Tensor hidden0(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
+  tensor::Tensor hidden1(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
+  tensor::Tensor rms_out(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
+  tensor::Tensor query(base::DataType::kDataTypeFp16, seq_len, attn_dim, true, cuda_alloc);
+  tensor::Tensor key(base::DataType::kDataTypeFp16, seq_len, kv_dim, true, cuda_alloc);
+  tensor::Tensor value(base::DataType::kDataTypeFp16, seq_len, kv_dim, true, cuda_alloc);
+  tensor::Tensor mha_out(base::DataType::kDataTypeFp16, seq_len, attn_dim, true, cuda_alloc);
+  tensor::Tensor wo_out(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
+  tensor::Tensor score(base::DataType::kDataTypeFp16, seq_len, config_->head_num_, max_seq,
+                       true, cuda_alloc);
+  tensor::Tensor ffn_norm(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
+  tensor::Tensor w1_out(base::DataType::kDataTypeFp16, seq_len, hidden_dim, true, cuda_alloc);
+  tensor::Tensor w3_out(base::DataType::kDataTypeFp16, seq_len, hidden_dim, true, cuda_alloc);
+  tensor::Tensor w2_out(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
+
+  cudaMemcpyAsync(hidden0.ptr<__half>(), input.ptr<__half>(), input.byte_size(),
+                  cudaMemcpyDeviceToDevice, cuda_config_->stream);
+
+  for (int32_t layer = 0; layer < config_->layer_num_; ++layer) {
+    // Ping-pong hidden states.  Layer 0 reads hidden0 and writes hidden1;
+    // every following layer must consume the previous layer's output rather
+    // than always reading hidden1.
+    const tensor::Tensor& layer_input =
+        (layer == 0) ? hidden0 : ((layer % 2 == 1) ? hidden1 : hidden0);
+    tensor::Tensor& layer_output = (layer % 2 == 0) ? hidden1 : hidden0;
+
+    if (std::getenv("QWEN3_PREFILL_SINGLE_NORM") != nullptr) {
+      auto make_row = [](const tensor::Tensor& tensor, int32_t width, int32_t index) {
+        auto buffer = std::make_shared<base::Buffer>(
+            static_cast<size_t>(width) * sizeof(__half), nullptr,
+            const_cast<__half*>(tensor.ptr<__half>(static_cast<size_t>(index) * width)), true);
+        tensor::Tensor result(base::DataType::kDataTypeFp16, width);
+        CHECK(result.assign(buffer));
+        result.set_device_type(base::DeviceType::kDeviceCUDA);
+        return result;
+      };
+      for (int32_t row = 0; row < seq_len; ++row) {
+        STATUS_CHECK(qwen_layers_->rmsnorm_layers_.at(layer)->forward(
+            make_row(layer_input, dim, row), make_row(rms_out, dim, row)));
+      }
+    } else {
+      STATUS_CHECK(qwen_layers_->rmsnorm_layers_.at(layer)->forward(layer_input, rms_out));
+    }
+    if (std::getenv("QWEN3_PREFILL_SINGLE_PROJ") != nullptr) {
+      auto make_row = [](const tensor::Tensor& tensor, int32_t width, int32_t index) {
+        auto buffer = std::make_shared<base::Buffer>(
+            static_cast<size_t>(width) * sizeof(__half), nullptr,
+            const_cast<__half*>(tensor.ptr<__half>(static_cast<size_t>(index) * width)), true);
+        tensor::Tensor result(base::DataType::kDataTypeFp16, width);
+        CHECK(result.assign(buffer));
+        result.set_device_type(base::DeviceType::kDeviceCUDA);
+        return result;
+      };
+      auto q = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->wq_layers_.at(layer));
+      auto k = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->wk_layers_.at(layer));
+      auto v = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->wv_layers_.at(layer));
+      CHECK(q != nullptr && k != nullptr && v != nullptr);
+      for (int32_t row = 0; row < seq_len; ++row) {
+        tensor::Tensor in_row = make_row(rms_out, dim, row);
+        tensor::Tensor q_row = make_row(query, attn_dim, row);
+        tensor::Tensor k_row = make_row(key, kv_dim, row);
+        tensor::Tensor v_row = make_row(value, kv_dim, row);
+        q->set_input(0, in_row); q->set_output(0, q_row);
+        k->set_input(0, in_row); k->set_output(0, k_row);
+        v->set_input(0, in_row); v->set_output(0, v_row);
+        STATUS_CHECK(q->forward());
+        STATUS_CHECK(k->forward());
+        STATUS_CHECK(v->forward());
+      }
+    } else {
+      batched_attention_qkv(layer, rms_out, query, key, value, seq_len, start_pos);
+    }
+
+    auto q_norm = qwen_layers_->rmsnorm_layers_.at(2 * config_->layer_num_ + layer + 1);
+    auto k_norm = qwen_layers_->rmsnorm_layers_.at(3 * config_->layer_num_ + layer + 1);
+    if (std::getenv("QWEN3_PREFILL_SINGLE_QK_NORM") != nullptr) {
+      auto make_row = [](const tensor::Tensor& tensor, int32_t width, int32_t index) {
+        auto buffer = std::make_shared<base::Buffer>(
+            static_cast<size_t>(width) * sizeof(__half), nullptr,
+            const_cast<__half*>(tensor.ptr<__half>(static_cast<size_t>(index) * width)), true);
+        tensor::Tensor result(base::DataType::kDataTypeFp16, width);
+        CHECK(result.assign(buffer));
+        result.set_device_type(base::DeviceType::kDeviceCUDA);
+        return result;
+      };
+      for (int32_t row = 0; row < seq_len; ++row) {
+        tensor::Tensor q_row = make_row(query, attn_dim, row);
+        tensor::Tensor k_row = make_row(key, kv_dim, row);
+        q_row.reshape({config_->head_num_, config_->head_size_});
+        STATUS_CHECK(q_norm->forward(q_row, q_row));
+        k_row.reshape({config_->kv_head_num_, config_->head_size_});
+        STATUS_CHECK(k_norm->forward(k_row, k_row));
+      }
+    } else {
+      query.reshape({seq_len * config_->head_num_, config_->head_size_});
+      STATUS_CHECK(q_norm->forward(query, query));
+      query.reshape({seq_len, attn_dim});
+      key.reshape({seq_len * config_->kv_head_num_, config_->head_size_});
+      STATUS_CHECK(k_norm->forward(key, key));
+      key.reshape({seq_len, kv_dim});
+    }
+
+    if (std::getenv("QWEN3_PREFILL_SINGLE_ROPE") != nullptr) {
+      auto make_row = [](const tensor::Tensor& tensor, int32_t width, int32_t index) {
+        auto buffer = std::make_shared<base::Buffer>(
+            static_cast<size_t>(width) * sizeof(__half), nullptr,
+            const_cast<__half*>(tensor.ptr<__half>(static_cast<size_t>(index) * width)), true);
+        tensor::Tensor result(base::DataType::kDataTypeFp16, width);
+        CHECK(result.assign(buffer));
+        result.set_device_type(base::DeviceType::kDeviceCUDA);
+        return result;
+      };
+      for (int32_t row = 0; row < seq_len; ++row) {
+        tensor::Tensor q_row = make_row(query, attn_dim, row);
+        tensor::Tensor k_row = make_row(key, kv_dim, row);
+        tensor::Tensor row_pos(base::DataType::kDataTypeInt32, 1, true,
+                               base::CPUDeviceAllocatorFactory::get_instance());
+        row_pos.index<int32_t>(0) = start_pos + row;
+        kernel::rope_kernel_cu(attn_dim, kv_dim, config_->head_size_, q_row, k_row, row_pos,
+                               get_buffer(ModelBufferType::kSinCache),
+                               get_buffer(ModelBufferType::kCosCache), cuda_config_->stream);
+        auto [cache_k, cache_v] = slice_kv_cache(layer, start_pos + row);
+        cudaMemcpyAsync(cache_k.ptr<__half>(), k_row.ptr<__half>(),
+                        kv_dim * sizeof(__half), cudaMemcpyDeviceToDevice, cuda_config_->stream);
+        cudaMemcpyAsync(cache_v.ptr<__half>(),
+                        value.ptr<__half>(static_cast<size_t>(row) * kv_dim),
+                        kv_dim * sizeof(__half), cudaMemcpyDeviceToDevice, cuda_config_->stream);
+      }
+    } else {
+      kernel::batched_rope_kernel_cu(start_pos, seq_len, attn_dim, kv_dim, config_->head_size_,
+                             query, key, get_buffer(ModelBufferType::kSinCache),
+                             get_buffer(ModelBufferType::kCosCache), cuda_config_->stream);
+      kernel::batched_kv_cache_kernel_cu(layer, start_pos, seq_len, max_seq, kv_dim, key, value,
+                                 get_buffer(ModelBufferType::kKeyCache),
+                                 get_buffer(ModelBufferType::kValueCache), cuda_config_->stream);
+    }
+
+    if (std::getenv("QWEN3_PREFILL_SINGLE_MHA") != nullptr) {
+      // Diagnostic path: use the already validated decode MHA kernel for each
+      // row while keeping all projections and FFN batched.
+      for (int32_t row = 0; row < seq_len; ++row) {
+        auto make_row = [](const tensor::Tensor& tensor, int32_t width, int32_t index) {
+          auto buffer = std::make_shared<base::Buffer>(
+              static_cast<size_t>(width) * sizeof(__half), nullptr,
+              const_cast<__half*>(tensor.ptr<__half>(static_cast<size_t>(index) * width)), true);
+          tensor::Tensor result(base::DataType::kDataTypeFp16, width);
+          CHECK(result.assign(buffer));
+          result.set_device_type(base::DeviceType::kDeviceCUDA);
+          return result;
+        };
+        tensor::Tensor q_row = make_row(query, attn_dim, row);
+        tensor::Tensor mha_row = make_row(mha_out, attn_dim, row);
+        kernel::mha_kernel_cu(start_pos + row, config_->head_num_, layer, max_seq,
+                              kv_dim, config_->kv_mul_, config_->head_size_, mha_row, q_row,
+                              get_buffer(ModelBufferType::kScoreStorage),
+                              get_buffer(ModelBufferType::kKeyCache),
+                              get_buffer(ModelBufferType::kValueCache), device_type_,
+                              cuda_config_.get());
+      }
+    } else {
+      kernel::batched_mha_kernel_cu(start_pos, seq_len, config_->head_num_, layer, max_seq,
+                            attn_dim, kv_dim, config_->kv_mul_, config_->head_size_, mha_out,
+                            query, score, get_buffer(ModelBufferType::kKeyCache),
+                            get_buffer(ModelBufferType::kValueCache), cuda_config_.get());
+    }
+    auto wo = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->wo_layers_.at(layer));
+    CHECK(wo != nullptr);
+    if (std::getenv("QWEN3_PREFILL_SINGLE_O") != nullptr) {
+      for (int32_t row = 0; row < seq_len; ++row) {
+        auto make_row = [](const tensor::Tensor& tensor, int32_t width, int32_t index) {
+          auto buffer = std::make_shared<base::Buffer>(
+              static_cast<size_t>(width) * sizeof(__half), nullptr,
+              const_cast<__half*>(tensor.ptr<__half>(static_cast<size_t>(index) * width)), true);
+          tensor::Tensor result(base::DataType::kDataTypeFp16, width);
+          CHECK(result.assign(buffer));
+          result.set_device_type(base::DeviceType::kDeviceCUDA);
+          return result;
+        };
+        tensor::Tensor in_row = make_row(layer_input, dim, row);
+        tensor::Tensor mha_row = make_row(mha_out, attn_dim, row);
+        tensor::Tensor out_row = make_row(layer_output, dim, row);
+        wo->set_input(0, mha_row); wo->set_output(0, out_row);
+        STATUS_CHECK(wo->forward());
+        kernel::get_add_kernel(device_type_)(in_row, out_row, out_row,
+                                             cuda_config_->stream);
+      }
+    } else {
+      STATUS_CHECK(qwen_layers_->batched_matmul_helper_layer_->forward(
+          mha_out, wo->get_weight(0), wo_out, seq_len, 1.f));
+      kernel::get_add_kernel(device_type_)(layer_input, wo_out, layer_output,
+                                           cuda_config_->stream);
+    }
+
+    auto w1 = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->w1_layers_.at(layer));
+    auto w3 = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->w3_layers_.at(layer));
+    auto w2 = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->w2_layers_.at(layer));
+    CHECK(w1 != nullptr && w3 != nullptr && w2 != nullptr);
+    if (std::getenv("QWEN3_PREFILL_SINGLE_FFN") != nullptr) {
+      for (int32_t row = 0; row < seq_len; ++row) {
+        auto make_row = [](const tensor::Tensor& tensor, int32_t width, int32_t index) {
+          auto buffer = std::make_shared<base::Buffer>(
+              static_cast<size_t>(width) * sizeof(__half), nullptr,
+              const_cast<__half*>(tensor.ptr<__half>(static_cast<size_t>(index) * width)), true);
+          tensor::Tensor result(base::DataType::kDataTypeFp16, width);
+          CHECK(result.assign(buffer));
+          result.set_device_type(base::DeviceType::kDeviceCUDA);
+          return result;
+        };
+        tensor::Tensor in_row = make_row(layer_output, dim, row);
+        tensor::Tensor norm_row = make_row(ffn_norm, dim, row);
+        tensor::Tensor w1_row = make_row(w1_out, hidden_dim, row);
+        tensor::Tensor w3_row = make_row(w3_out, hidden_dim, row);
+        tensor::Tensor w2_row = make_row(w2_out, dim, row);
+        STATUS_CHECK(qwen_layers_->rmsnorm_layers_.at(config_->layer_num_ + layer)->forward(
+            in_row, norm_row));
+        w1->set_input(0, norm_row); w1->set_output(0, w1_row);
+        w3->set_input(0, norm_row); w3->set_output(0, w3_row);
+        STATUS_CHECK(w1->forward());
+        STATUS_CHECK(w3->forward());
+        qwen_layers_->swiglu_layer_->set_input(0, w1_row);
+        qwen_layers_->swiglu_layer_->set_input(1, w3_row);
+        qwen_layers_->swiglu_layer_->set_output(0, w1_row);
+        STATUS_CHECK(qwen_layers_->swiglu_layer_->forward());
+        w2->set_input(0, w1_row); w2->set_output(0, w2_row);
+        STATUS_CHECK(w2->forward());
+        kernel::get_add_kernel(device_type_)(in_row, w2_row, in_row,
+                                             cuda_config_->stream);
+      }
+    } else {
+      STATUS_CHECK(qwen_layers_->rmsnorm_layers_.at(config_->layer_num_ + layer)->forward(
+          layer_output, ffn_norm));
+      STATUS_CHECK(qwen_layers_->batched_matmul_helper_layer_->forward(
+          ffn_norm, w1->get_weight(0), w1_out, seq_len, 1.f));
+      STATUS_CHECK(qwen_layers_->batched_matmul_helper_layer_->forward(
+          ffn_norm, w3->get_weight(0), w3_out, seq_len, 1.f));
+      kernel::get_swiglu_kernel(device_type_, cuda_config_->stream)(
+          w1_out, w3_out, w1_out, cuda_config_->stream);
+      STATUS_CHECK(qwen_layers_->batched_matmul_helper_layer_->forward(
+          w1_out, w2->get_weight(0), w2_out, seq_len, 1.f));
+      kernel::get_add_kernel(device_type_)(layer_output, w2_out, layer_output,
+                                           cuda_config_->stream);
+    }
+  }
+
+  tensor::Tensor& final_hidden = (config_->layer_num_ % 2 == 0) ? hidden0 : hidden1;
+  STATUS_CHECK(qwen_layers_->rmsnorm_layers_.at(2 * config_->layer_num_)->forward(
+      final_hidden, final_hidden));
+  auto final_buffer = std::make_shared<base::Buffer>(
+      static_cast<size_t>(dim) * sizeof(__half), nullptr,
+      const_cast<__half*>(final_hidden.ptr<__half>(static_cast<size_t>(seq_len - 1) * dim)), true);
+  tensor::Tensor last(base::DataType::kDataTypeFp16, dim);
+  CHECK(last.assign(final_buffer));
+  last.set_device_type(device_type_);
+  STATUS_CHECK(qwen_layers_->cls_layer_->forward(last, get_buffer(ModelBufferType::kForwardOutput)));
   return base::error::Success();
 }
 
@@ -632,7 +947,16 @@ base::Status Qwen3Model::predict(const tensor::Tensor& input, const tensor::Tens
   if (!status) {
     return status;
   }
-  next = post_processing(pos_tensor, is_prompt);
+  // A batched prompt produces logits for the last prompt row.  Sample them
+  // immediately so the caller can switch to the single-token decode path.
+  if (input.dims_size() == 2) {
+    auto forward_output = get_buffer(ModelBufferType::kForwardOutput);
+    next = static_cast<int32_t>(sampler_->sample(
+        forward_output.ptr<__half>(), forward_output.size(),
+        cuda_config_ ? cuda_config_->stream : nullptr));
+  } else {
+    next = post_processing(pos_tensor, is_prompt);
+  }
   return base::error::Success();
 }
 
@@ -731,18 +1055,24 @@ op::EmbeddingOutput Qwen3Model::embedding(const std::vector<int>& tokens) const 
 tensor::Tensor Model::fill_input(const tensor::Tensor& pos_tensor,
                                  const op::EmbeddingOutput& embedding_output,
                                  bool is_prompt) const {
-  const int32_t pos = pos_tensor.index<int32_t>(0);
   auto [input_tokens, input_embeddings, input_token_num] = embedding_output;
 
-  int32_t index = 0;
   if (is_prompt) {
-    index = pos;
+    return input_embeddings;
   }
-  const auto* emb_ptr = input_embeddings.ptr<__half>(index * config_->dim_);
+
+  const int32_t pos = pos_tensor.index<int32_t>(0);
+  CHECK_EQ(input_embeddings.dims_size(), 2);
+  CHECK_GE(pos, 0);
+  // Decode embedding() contains only the newly generated token, so its
+  // local row is always zero.  `pos` is the global KV-cache position.
+  CHECK_EQ(input_embeddings.get_dim(0), 1);
+  const int32_t hidden_dim = input_embeddings.get_dim(1);
+  const auto* emb_ptr = input_embeddings.ptr<__half>(0);
   std::shared_ptr<base::Buffer> input_emb_buffer = std::make_shared<base::Buffer>(
-      config_->dim_ * sizeof(__half), nullptr,
+      static_cast<size_t>(hidden_dim) * sizeof(__half), nullptr,
       const_cast<void*>(static_cast<const void*>(emb_ptr)), true);
-  tensor::Tensor input(base::DataType::kDataTypeFp16, config_->dim_);
+  tensor::Tensor input(base::DataType::kDataTypeFp16, hidden_dim);
 
   input.assign(input_emb_buffer);
   input.set_device_type(device_type_);

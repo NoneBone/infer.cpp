@@ -55,6 +55,8 @@ public:
 
     base::Status forward(const tensor::Tensor& input, const tensor::Tensor& pos_tensor,
                         int& next) const override;
+    base::Status prefill(const tensor::Tensor& input, int32_t seq_len,
+                         int32_t start_pos) const;
 
     op::EmbeddingOutput embedding(const std::vector<int>& tokens) const override;
  private:

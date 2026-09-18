@@ -59,6 +59,11 @@ if(QWEN_SOURCES)
     # sentencepiece_processor.h provides a fallback absl::string_view unless
     # it is told to use the same installed Abseil headers as this project.
     target_compile_definitions(qwen PUBLIC _USE_TF_STRING_VIEW)
+    set_target_properties(qwen PROPERTIES
+        CUDA_ARCHITECTURES 89
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON
+    )
 endif()
 
 

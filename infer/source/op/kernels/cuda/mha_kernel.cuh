@@ -1,5 +1,6 @@
 #ifndef INFER_OP_CU_KERNEL_MHA
 #define INFER_OP_CU_KERNEL_MHA
+
 #include <cstdint>
 #include "tensor/tensor.h"
 #include "base/cuda_config.h"
@@ -10,5 +11,11 @@ namespace kernel
                     const tensor::Tensor &query_tensor, const tensor::Tensor &score_tensor,
                     const tensor::Tensor &key_cache_tensor, const tensor::Tensor &value_cache_tensor,
                     base::DeviceType device_type, CudaConfig *config);
+ void batched_mha_kernel_cu(int32_t start_pos, int32_t seq_len, int32_t head_num,
+                            int32_t layer_index, int32_t max_seq_len, int32_t dim,
+                            int32_t kv_dim, int32_t kv_mul, int32_t head_size,
+                            const tensor::Tensor& output, const tensor::Tensor& query,
+                            const tensor::Tensor& score, const tensor::Tensor& key_cache,
+                            const tensor::Tensor& value_cache, CudaConfig* config);
 }
 #endif

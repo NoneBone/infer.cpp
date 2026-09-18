@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <vector>
@@ -11,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include "../source/op/kernels/kernels_interface.h"
+#include "../source/op/kernels/cuda/mha_kernel.cuh"
 #include "base/cuda_config.h"
 #include "tensor/tensor.h"
 
@@ -146,6 +148,223 @@ TEST(test_mha_cu, cpu_cuda_match) {
   }
   std::cout << "Metric,MaxAbsoluteError\n"
             << "CPU_FP32_vs_CUDA_FP16," << max_abs_error << "\n";
+}
+
+TEST(test_mha_cu, batched_prefill_matches_cpu) {
+  if (!has_cuda_device()) GTEST_SKIP() << "CUDA device is unavailable";
+
+  constexpr int32_t head_num = 4;
+  constexpr int32_t kv_head_num = 2;
+  constexpr int32_t head_size = 128;
+  constexpr int32_t dim = head_num * head_size;
+  constexpr int32_t kv_dim = kv_head_num * head_size;
+  constexpr int32_t kv_mul = head_num / kv_head_num;
+  constexpr int32_t layer_index = 1;
+  constexpr int32_t start_pos = 70;
+  constexpr int32_t seq_len = 19;
+  constexpr int32_t max_seq_len = 96;
+
+  auto alloc_cpu = base::CPUDeviceAllocatorFactory::get_instance();
+  kernel::CudaConfig cuda_config;
+  tensor::Tensor query_cpu(base::DataType::kDataTypeFp16, seq_len, dim, true, alloc_cpu);
+  tensor::Tensor score_cpu(base::DataType::kDataTypeFp16, seq_len, head_num,
+                           max_seq_len, true, alloc_cpu);
+  tensor::Tensor output_cpu(base::DataType::kDataTypeFp16, seq_len, dim, true, alloc_cpu);
+  tensor::Tensor key_cache_cpu(base::DataType::kDataTypeFp16, layer_index + 1,
+                               max_seq_len, kv_dim, true, alloc_cpu);
+  tensor::Tensor value_cache_cpu(base::DataType::kDataTypeFp16, layer_index + 1,
+                                 max_seq_len, kv_dim, true, alloc_cpu);
+
+  std::mt19937 rng(20260918);
+  std::uniform_real_distribution<float> dist(-0.2f, 0.2f);
+  for (int64_t i = 0; i < query_cpu.size(); ++i) {
+    query_cpu.index<__half>(i) = __float2half(dist(rng));
+  }
+  for (int64_t i = 0; i < key_cache_cpu.size(); ++i) {
+    key_cache_cpu.index<__half>(i) = __float2half(dist(rng));
+    value_cache_cpu.index<__half>(i) = __float2half(dist(rng));
+  }
+
+  std::vector<float> expected(static_cast<size_t>(seq_len) * dim, 0.0f);
+  std::vector<float> logits(max_seq_len);
+  const float scale = 1.0f / std::sqrt(static_cast<float>(head_size));
+  const size_t layer_base =
+      static_cast<size_t>(layer_index) * max_seq_len * kv_dim;
+  for (int32_t row = 0; row < seq_len; ++row) {
+    const int32_t query_pos = start_pos + row;
+    for (int32_t head = 0; head < head_num; ++head) {
+      const int32_t kv_head_offset = (head / kv_mul) * head_size;
+      float max_logit = -std::numeric_limits<float>::infinity();
+      for (int32_t kv_pos = 0; kv_pos <= query_pos; ++kv_pos) {
+        float dot = 0.0f;
+        for (int32_t d = 0; d < head_size; ++d) {
+          const size_t query_index =
+              static_cast<size_t>(row) * dim + head * head_size + d;
+          const size_t key_index = layer_base +
+              static_cast<size_t>(kv_pos) * kv_dim + kv_head_offset + d;
+          dot += __half2float(query_cpu.index<__half>(query_index)) *
+                 __half2float(key_cache_cpu.index<__half>(key_index));
+        }
+        logits[kv_pos] = dot * scale;
+        max_logit = std::max(max_logit, logits[kv_pos]);
+      }
+      float sum = 0.0f;
+      for (int32_t kv_pos = 0; kv_pos <= query_pos; ++kv_pos) {
+        logits[kv_pos] = std::exp(logits[kv_pos] - max_logit);
+        sum += logits[kv_pos];
+      }
+      for (int32_t d = 0; d < head_size; ++d) {
+        float value = 0.0f;
+        for (int32_t kv_pos = 0; kv_pos <= query_pos; ++kv_pos) {
+          const size_t value_index = layer_base +
+              static_cast<size_t>(kv_pos) * kv_dim + kv_head_offset + d;
+          value += logits[kv_pos] / sum *
+                   __half2float(value_cache_cpu.index<__half>(value_index));
+        }
+        expected[static_cast<size_t>(row) * dim + head * head_size + d] = value;
+      }
+    }
+  }
+
+  tensor::Tensor query = query_cpu.clone();
+  tensor::Tensor score = score_cpu.clone();
+  tensor::Tensor output = output_cpu.clone();
+  tensor::Tensor key_cache = key_cache_cpu.clone();
+  tensor::Tensor value_cache = value_cache_cpu.clone();
+  query.to_cuda(cuda_config.stream);
+  score.to_cuda(cuda_config.stream);
+  output.to_cuda(cuda_config.stream);
+  key_cache.to_cuda(cuda_config.stream);
+  value_cache.to_cuda(cuda_config.stream);
+
+  kernel::batched_mha_kernel_cu(
+      start_pos, seq_len, head_num, layer_index, max_seq_len, dim, kv_dim,
+      kv_mul, head_size, output, query, score, key_cache, value_cache,
+      &cuda_config);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+  output.to_cpu();
+
+  float max_abs_error = 0.0f;
+  for (int64_t i = 0; i < output.size(); ++i) {
+    const float actual = __half2float(output.index<__half>(i));
+    ASSERT_TRUE(std::isfinite(actual));
+    max_abs_error = std::max(
+        max_abs_error, std::fabs(actual - expected[static_cast<size_t>(i)]));
+  }
+  EXPECT_LT(max_abs_error, 5e-3f);
+}
+
+TEST(test_mha_cu, batched_prefill_benchmark) {
+  if (!has_cuda_device()) GTEST_SKIP() << "CUDA device is unavailable";
+
+  // Qwen3-4B: 32 个 Query 头、8 个 KV 头、每头 128 维。
+  constexpr int32_t head_num = 32;
+  constexpr int32_t kv_head_num = 8;
+  constexpr int32_t head_size = 128;
+  constexpr int32_t dim = head_num * head_size;
+  constexpr int32_t kv_dim = kv_head_num * head_size;
+  constexpr int32_t kv_mul = head_num / kv_head_num;
+  constexpr int32_t layer_index = 0;
+  constexpr int32_t warmup = 2;
+  constexpr int32_t iterations = 20;
+  constexpr int32_t threads_per_block = 128;
+
+  struct Case {
+    const char* name;
+    int32_t seq_len;
+  };
+  const Case cases[] = {
+      {"prefill_128", 128},
+      {"prefill_512", 512},
+  };
+
+  auto alloc_cpu = base::CPUDeviceAllocatorFactory::get_instance();
+  std::mt19937 rng(5678);
+  std::uniform_real_distribution<float> dist(-0.02f, 0.02f);
+  kernel::CudaConfig cuda_config;
+
+  std::cout << "Time[us],Total Time[ms],Instances,Avg[us],StdDev[us],GridXYZ,BlockXYZ,Name\n";
+
+  for (const auto& c : cases) {
+    tensor::Tensor query_cpu(base::DataType::kDataTypeFp16, c.seq_len, dim, true,
+                             alloc_cpu);
+    tensor::Tensor score_cpu(base::DataType::kDataTypeFp16, c.seq_len, head_num,
+                             c.seq_len, true, alloc_cpu);
+    tensor::Tensor output_cpu(base::DataType::kDataTypeFp16, c.seq_len, dim, true,
+                              alloc_cpu);
+    tensor::Tensor key_cache_cpu(base::DataType::kDataTypeFp16, c.seq_len, kv_dim,
+                                 true, alloc_cpu);
+    tensor::Tensor value_cache_cpu(base::DataType::kDataTypeFp16, c.seq_len, kv_dim,
+                                   true, alloc_cpu);
+
+    for (int64_t i = 0; i < query_cpu.size(); ++i) {
+      query_cpu.index<__half>(i) = __float2half(dist(rng));
+    }
+    for (int64_t i = 0; i < key_cache_cpu.size(); ++i) {
+      key_cache_cpu.index<__half>(i) = __float2half(dist(rng));
+      value_cache_cpu.index<__half>(i) = __float2half(dist(rng));
+    }
+
+    tensor::Tensor query = query_cpu.clone();
+    tensor::Tensor score = score_cpu.clone();
+    tensor::Tensor output = output_cpu.clone();
+    tensor::Tensor key_cache = key_cache_cpu.clone();
+    tensor::Tensor value_cache = value_cache_cpu.clone();
+    query.to_cuda(cuda_config.stream);
+    score.to_cuda(cuda_config.stream);
+    output.to_cuda(cuda_config.stream);
+    key_cache.to_cuda(cuda_config.stream);
+    value_cache.to_cuda(cuda_config.stream);
+
+    for (int32_t w = 0; w < warmup; ++w) {
+      kernel::batched_mha_kernel_cu(
+          0, c.seq_len, head_num, layer_index, c.seq_len, dim, kv_dim, kv_mul,
+          head_size, output, query, score, key_cache, value_cache, &cuda_config);
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::vector<double> samples;
+    samples.reserve(iterations);
+    for (int32_t iter = 0; iter < iterations; ++iter) {
+      const auto begin = std::chrono::steady_clock::now();
+      kernel::batched_mha_kernel_cu(
+          0, c.seq_len, head_num, layer_index, c.seq_len, dim, kv_dim, kv_mul,
+          head_size, output, query, score, key_cache, value_cache, &cuda_config);
+      ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+      const auto end = std::chrono::steady_clock::now();
+      samples.push_back(
+          std::chrono::duration<double, std::micro>(end - begin).count());
+    }
+
+    const double total = std::accumulate(samples.begin(), samples.end(), 0.0);
+    const double avg = total / samples.size();
+    double variance = 0.0;
+    for (const double value : samples) {
+      variance += (value - avg) * (value - avg);
+    }
+    const double stddev = std::sqrt(variance / samples.size());
+#if INFER_BATCHED_MHA_BACKEND == 0
+    const int32_t grid_x = head_num;
+    const int32_t grid_y = c.seq_len;
+    constexpr const char* kernel_name = "kernel::batched_mha_fp16";
+#else
+    constexpr int32_t query_rows_per_block = 16;
+    const int32_t grid_x =
+        (c.seq_len + query_rows_per_block - 1) / query_rows_per_block;
+    const int32_t grid_y = head_num;
+    constexpr const char* kernel_name =
+        "kernel::batched_mha_prefill_wmma_kernel";
+#endif
+
+    std::cout << std::fixed << std::setprecision(3)
+              << avg << "," << total / 1000.0 << "," << samples.size() << ","
+              << avg << "," << stddev << ","
+              << grid_x << " " << grid_y << " 1,"
+              << threads_per_block << " 1 1,"
+              << "\"" << kernel_name << "\","
+              << c.name << "\n";
+  }
 }
 
 TEST(test_mha_cu, benchmark) {

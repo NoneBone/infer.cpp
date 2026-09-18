@@ -15,42 +15,36 @@ int32_t generate(const model::Qwen3Model &model, const std::string &sentence, in
   LOG_IF(FATAL, tokens.empty()) << "The token is empty.";
 
   int32_t pos = 0;
-  int32_t next = tokens.at(pos);
+  int32_t next = tokens.back();
   bool is_prompt = true;
   const auto &prompt_embedding = model.embedding(tokens);
   tensor::Tensor pos_tensor = model.get_buffer(model::ModelBufferType::kInputPos);
 
+  // Prefill is submitted once as [prompt_len, hidden_size].  Its last-row
+  // logits produce the first token for the decode phase.
+  pos_tensor.index<int32_t>(0) = 0;
+  tensor::Tensor prompt_input = model.fill_input(pos_tensor, prompt_embedding, true);
+  auto prefill_status = model.predict(prompt_input, pos_tensor, true, next);
+  CHECK(prefill_status) << "Prefill failed: " << prefill_status.get_err_msg();
+  pos = prompt_len;
+  is_prompt = false;
+
   std::vector<int32_t> words;
   while (pos < total_steps)
   {
+    // `next` is the first token sampled from the prefill logits.  Emit it
+    // before feeding it back into the model for the following position.
+    if (model.is_sentence_ending(next)) break;
+    words.push_back(next);
+    ++pos;
+    if (pos >= total_steps) break;
+
     pos_tensor.index<int32_t>(0) = pos;
-    if (pos < prompt_len - 1)
-    {
-      tensor::Tensor input = model.fill_input(pos_tensor, prompt_embedding, is_prompt);
-      model.predict(input, pos_tensor, is_prompt, next);
-    }
-    else
-    {
-      is_prompt = false;
-      tokens = std::vector<int32_t>{next};
-      const auto &token_embedding = model.embedding(tokens);
-      tensor::Tensor input = model.fill_input(pos_tensor, token_embedding, is_prompt);
-      const auto status = model.predict(input, pos_tensor, is_prompt, next);
-      CHECK(status) << "Model prediction failed: " << status.get_err_msg();
-      // Do not feed end-of-turn/end-of-text markers to the decoder.
-      if (model.is_sentence_ending(next))
-      {
-        break;
-      }
-      words.push_back(next);
-    }
-    if (model.is_sentence_ending(next))
-      break;
-    if (is_prompt)
-    {
-      next = tokens.at(pos + 1);
-    }
-    pos += 1;
+    tokens = std::vector<int32_t>{next};
+    const auto &token_embedding = model.embedding(tokens);
+    tensor::Tensor input = model.fill_input(pos_tensor, token_embedding, false);
+    const auto status = model.predict(input, pos_tensor, false, next);
+    CHECK(status) << "Model prediction failed: " << status.get_err_msg();
   }
   if (need_output)
   {
@@ -86,7 +80,8 @@ TEST(test_qwen3, cuda)
   nvTT.time_push("model.init");
   auto status = model.init(base::DeviceType::kDeviceCUDA);
   ASSERT_TRUE(status) << "Qwen3 model initialization failed: " << status.get_err_msg();
-  const int total_steps = 16;
+  // Total sequence length = prompt length + generated tokens.
+  const int total_steps = 32;
 
   {
     std::string hi = "What is AI?";
@@ -119,18 +114,19 @@ TEST(test_qwen3, cuda)
     }
     mP.mem_push("af_infer");
     nvTT.time_push("post");
-    const float *logits =
-        model.get_buffer(model::ModelBufferType::kForwardOutput).ptr<float>();
+    const __half *logits =
+        model.get_buffer(model::ModelBufferType::kForwardOutput).ptr<__half>();
     ASSERT_NE(logits, nullptr);
     const auto &output = model.get_buffer(model::ModelBufferType::kForwardOutput);
     ASSERT_GT(output.size(), 0u);
     std::array<float, 8> sample{};
     const size_t sample_count = std::min(sample.size(), output.size());
-    ASSERT_EQ(cudaMemcpy(sample.data(), logits, sample_count * sizeof(float),
-                         cudaMemcpyDeviceToHost),
-              cudaSuccess);
+    std::array<__half, 8> sample_fp16{};
+    ASSERT_EQ(cudaMemcpy(sample_fp16.data(), logits, sample_count * sizeof(__half),
+                         cudaMemcpyDeviceToHost), cudaSuccess);
     for (size_t i = 0; i < sample_count; ++i)
     {
+      sample[i] = __half2float(sample_fp16[i]);
       ASSERT_TRUE(std::isfinite(sample[i])) << "non-finite logit at index " << i;
     }
     std::cout << "first logits:";
