@@ -1,5 +1,11 @@
 #ifndef INFER_OP_CU_KERNEL_MHA
 #define INFER_OP_CU_KERNEL_MHA
+#ifndef INFER_BATCHED_MHA_BACKEND
+#define INFER_BATCHED_MHA_BACKEND 1
+#endif
+#ifndef INFER_DECODE_MHA_BACKEND
+#define INFER_DECODE_MHA_BACKEND 1
+#endif
 
 #include <cstdint>
 #include "tensor/tensor.h"
@@ -15,7 +21,7 @@ namespace kernel
                             int32_t layer_index, int32_t max_seq_len, int32_t dim,
                             int32_t kv_dim, int32_t kv_mul, int32_t head_size,
                             const tensor::Tensor& output, const tensor::Tensor& query,
-                            const tensor::Tensor& score, const tensor::Tensor& key_cache,
-                            const tensor::Tensor& value_cache, CudaConfig* config);
+                            const tensor::Tensor& key_cache, const tensor::Tensor& value_cache,
+                            CudaConfig* config);
 }
 #endif

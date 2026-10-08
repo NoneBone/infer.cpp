@@ -1,5 +1,5 @@
 # dict
-Qwen/Qwen3-0.6B
+Qwen/*
 build/
 tools/
 log/
@@ -10,4 +10,5 @@ docs/0*.md
 *.so
 *.json
 *.bin
-.vscode/launch.json
+*.*-rep
+*.sqlite

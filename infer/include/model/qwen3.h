@@ -55,8 +55,10 @@ public:
 
     base::Status forward(const tensor::Tensor& input, const tensor::Tensor& pos_tensor,
                         int& next) const override;
+    // Optional [seq_len, vocab_size] FP16 logits for evaluation; the default
+    // generation path still computes only the last row.
     base::Status prefill(const tensor::Tensor& input, int32_t seq_len,
-                         int32_t start_pos) const;
+                         int32_t start_pos, const tensor::Tensor* all_logits = nullptr) const;
 
     op::EmbeddingOutput embedding(const std::vector<int>& tokens) const override;
  private:

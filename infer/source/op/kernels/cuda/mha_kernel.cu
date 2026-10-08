@@ -5,14 +5,15 @@
 #include <math_constants.h>
 #include <mma.h>
 
-#ifndef INFER_BATCHED_MHA_BACKEND
-#define INFER_BATCHED_MHA_BACKEND 1
-#endif
 
 namespace kernel
 {
 namespace wmma = nvcuda::wmma;
- __global__ void mha_fp16(int pos, int seq, int kvdim, int kvmul, int heads, int hs, int off, const __half *q, __half *score, __half *out, const __half *kc, const __half *vc)
+namespace {
+
+__global__ void mha_fp16_legacy(int pos, int seq, int kvdim, int kvmul, int heads,
+                                int hs, int off, const __half *q, __half *score,
+                                __half *out, const __half *kc, const __half *vc)
  {
   int h = blockIdx.x;
   if (h >= heads)
@@ -53,23 +54,162 @@ namespace wmma = nvcuda::wmma;
    out[h * hs + i] = __float2half(v);
   }
  }
+
+#if INFER_DECODE_MHA_BACKEND == 1
+template <int HEAD_DIM, int NUM_WARPS>
+__global__ void mha_fp16_decode_optimized(
+    int pos, int seq, int kvdim, int kvmul, int heads, int layer,
+    const __half* __restrict__ query, __half* __restrict__ score,
+    __half* __restrict__ output, const __half* __restrict__ key_cache,
+    const __half* __restrict__ value_cache) {
+  static_assert(HEAD_DIM % 32 == 0, "HEAD_DIM must be divisible by warp size");
+  constexpr int kWarpSize = 32;
+  constexpr int kElemsPerLane = HEAD_DIM / kWarpSize;
+  const int head = blockIdx.x;
+  const int warp_id = threadIdx.x / kWarpSize;
+  const int lane = threadIdx.x % kWarpSize;
+  if (head >= heads || warp_id >= NUM_WARPS) return;
+
+  const int kv_head_offset = (head / kvmul) * HEAD_DIM;
+  const size_t layer_base = static_cast<size_t>(layer) * seq * kvdim;
+  const __half* q_ptr = query + static_cast<size_t>(head) * HEAD_DIM;
+  const __half* k_base = key_cache + layer_base + kv_head_offset;
+  const __half* v_base = value_cache + layer_base + kv_head_offset;
+  __half* score_head = score + static_cast<size_t>(head) * seq;
+  __half* out_ptr = output + static_cast<size_t>(head) * HEAD_DIM;
+
+  // 每个 lane 持有 HEAD_DIM/32 个 Q 和输出维度元素。这样一个 warp
+  // 可以协同计算一个 token 的 QK，并同时累加该 token 的 V。
+  float q_reg[kElemsPerLane];
+  float value_acc[kElemsPerLane];
+#pragma unroll
+  for (int i = 0; i < kElemsPerLane; ++i) {
+    q_reg[i] = __half2float(q_ptr[lane + i * kWarpSize]);
+    value_acc[i] = 0.0f;
+  }
+
+  // Flash Decoding 的第一阶段：每个 warp 扫描自己的 KV 分片。
+  // 不保存 exp(score)，而是在线维护：
+  //   m = max(score), s = sum(exp(score-m)), a = sum(exp(score-m)*V)
+  float shard_max = -CUDART_INF_F;
+  float shard_sum = 0.0f;
+  for (int t = warp_id; t <= pos; t += NUM_WARPS) {
+    const __half* k_ptr = k_base + static_cast<size_t>(t) * kvdim;
+    const __half* v_ptr = v_base + static_cast<size_t>(t) * kvdim;
+    float qk = 0.0f;
+#pragma unroll
+    for (int i = 0; i < kElemsPerLane; ++i) {
+      qk += q_reg[i] * __half2float(k_ptr[lane + i * kWarpSize]);
+    }
+#pragma unroll
+    for (int mask = kWarpSize / 2; mask > 0; mask >>= 1) {
+      qk += __shfl_xor_sync(0xffffffff, qk, mask);
+    }
+    const float token_score = qk * rsqrtf(static_cast<float>(HEAD_DIM));
+    if (lane == 0) score_head[t] = __float2half(token_score);
+
+    const float new_max = fmaxf(shard_max, token_score);
+    const float old_scale = (shard_sum == 0.0f) ? 0.0f : expf(shard_max - new_max);
+    const float token_scale = expf(token_score - new_max);
+    shard_sum = shard_sum * old_scale + token_scale;
+#pragma unroll
+    for (int i = 0; i < kElemsPerLane; ++i) {
+      const float value = __half2float(v_ptr[lane + i * kWarpSize]);
+      value_acc[i] = value_acc[i] * old_scale + value * token_scale;
+    }
+    shard_max = new_max;
+  }
+
+  extern __shared__ float shared[];
+  float* warp_max_shared = shared;
+  float* warp_sum_shared = warp_max_shared + NUM_WARPS;
+  float* warp_out_shared = warp_sum_shared + NUM_WARPS;
+  float* global_max = warp_out_shared + NUM_WARPS * HEAD_DIM;
+  float* global_sum = global_max + 1;
+
+  if (lane == 0) {
+    warp_max_shared[warp_id] = shard_max;
+    warp_sum_shared[warp_id] = shard_sum;
+  }
+#pragma unroll
+  for (int i = 0; i < kElemsPerLane; ++i) {
+    warp_out_shared[warp_id * HEAD_DIM + lane + i * kWarpSize] = value_acc[i];
+  }
+  __syncthreads();
+
+  // Flash Decoding 的第二阶段：合并各 KV 分片的局部 softmax。
+  // 对任意两个分片 (m1,s1,a1)、(m2,s2,a2)，统一到 m=max(m1,m2)：
+  // s=s1*exp(m1-m)+s2*exp(m2-m)，a 同理。
+  if (threadIdx.x == 0) {
+    float max_value = -CUDART_INF_F;
+    for (int w = 0; w < NUM_WARPS; ++w) {
+      max_value = fmaxf(max_value, warp_max_shared[w]);
+    }
+    float sum_value = 0.0f;
+    for (int w = 0; w < NUM_WARPS; ++w) {
+      if (warp_sum_shared[w] > 0.0f) {
+        sum_value += warp_sum_shared[w] * expf(warp_max_shared[w] - max_value);
+      }
+    }
+    *global_max = max_value;
+    *global_sum = sum_value;
+  }
+  __syncthreads();
+
+  const float inv_sum = *global_sum > 0.0f ? 1.0f / *global_sum : 0.0f;
+#pragma unroll
+  for (int i = 0; i < kElemsPerLane; ++i) {
+    const int d = lane + i * kWarpSize;
+    float value = 0.0f;
+    for (int w = 0; w < NUM_WARPS; ++w) {
+      if (warp_sum_shared[w] > 0.0f) {
+        value += warp_out_shared[w * HEAD_DIM + d] *
+                 expf(warp_max_shared[w] - *global_max);
+      }
+    }
+    out_ptr[d] = __float2half(value * inv_sum);
+  }
+
+  // Preserve the legacy score buffer contract: store normalized attention
+  // probabilities after the block-wide online-softmax merge.
+  if (lane == 0) {
+    for (int t = warp_id; t <= pos; t += NUM_WARPS) {
+      const float probability =
+          expf(__half2float(score_head[t]) - *global_max) * inv_sum;
+      score_head[t] = __float2half(probability);
+    }
+  }
+}
+#endif
+}  // namespace
  void mha_kernel_cu(int32_t pos, int32_t heads, int32_t layer, int32_t seq, int32_t kvdim, int32_t kvmul, int32_t hs, const tensor::Tensor &out, const tensor::Tensor &q, const tensor::Tensor &score, const tensor::Tensor &kc, const tensor::Tensor &vc, base::DeviceType, CudaConfig *cfg)
  {
   CHECK(cfg);
   CHECK(out.data_type() == base::DataType::kDataTypeFp16);
   int off = layer * seq * kvdim;
-  mha_fp16<<<heads, 256, hs * sizeof(float), cfg->stream>>>(pos, seq, kvdim, kvmul, heads, hs, off, q.ptr<__half>(), const_cast<__half *>(score.ptr<__half>()), const_cast<__half *>(out.ptr<__half>()), kc.ptr<__half>(), vc.ptr<__half>());
+#if INFER_DECODE_MHA_BACKEND == 1
+  if (hs == 128) {
+    constexpr int kWarps = 4;
+    const size_t shared_bytes =
+        (2 * kWarps + kWarps * hs + 2) * sizeof(float);
+    mha_fp16_decode_optimized<128, kWarps>
+        <<<heads, kWarps * 32, shared_bytes, cfg->stream>>>(
+            pos, seq, kvdim, kvmul, heads, layer, q.ptr<__half>(),
+            const_cast<__half*>(score.ptr<__half>()),
+            const_cast<__half*>(out.ptr<__half>()), kc.ptr<__half>(),
+            vc.ptr<__half>());
+    return;
+  }
+#endif
+  mha_fp16_legacy<<<heads, 256, hs * sizeof(float), cfg->stream>>>(
+      pos, seq, kvdim, kvmul, heads, hs, off, q.ptr<__half>(),
+      const_cast<__half*>(score.ptr<__half>()), const_cast<__half*>(out.ptr<__half>()),
+      kc.ptr<__half>(), vc.ptr<__half>());
  }
 #if INFER_BATCHED_MHA_BACKEND == 0
  namespace {
  constexpr int kBatchedBlockThreads = 128;
  constexpr int kBatchedWarpSize = 32;
-
- __device__ __forceinline__ float batched_warp_reduce_max(float value) {
-  for (int offset = kBatchedWarpSize / 2; offset > 0; offset /= 2)
-   value = fmaxf(value, __shfl_down_sync(0xffffffff, value, offset));
-  return value;
- }
 
  __device__ __forceinline__ float batched_warp_reduce_sum(float value) {
   for (int offset = kBatchedWarpSize / 2; offset > 0; offset /= 2)
@@ -79,7 +219,7 @@ namespace wmma = nvcuda::wmma;
 
  __global__ void batched_mha_fp16(int start_pos, int seq_len, int max_seq, int dim, int kv_dim,
                                    int kv_mul, int heads, int hs, int layer,
-                                   const __half* query, __half* score, const __half* kc,
+                                   const __half* query, const __half* kc,
                                    const __half* vc, __half* output) {
   const int head = blockIdx.x;
   const int row = blockIdx.y;
@@ -93,67 +233,68 @@ namespace wmma = nvcuda::wmma;
   const int query_offset = row * dim + head * hs;
   const int kv_head_offset = (head / kv_mul) * hs;
   const size_t layer_base = static_cast<size_t>(layer) * max_seq * kv_dim;
-  const size_t score_base =
-      (static_cast<size_t>(row) * heads + head) * max_seq;
 
-  extern __shared__ float query_shared[];
+  extern __shared__ float shared[];
+  float* query_shared = shared;
+  float* output_shared = shared + hs;
   __shared__ float warp_values[kBatchedBlockThreads / kBatchedWarpSize];
-  __shared__ float block_value;
+  __shared__ float block_dot;
+  __shared__ float running_max;
+  __shared__ float running_sum;
+  __shared__ float old_scale;
+  __shared__ float token_scale;
 
-  for (int d = tid; d < hs; d += blockDim.x)
+  for (int d = tid; d < hs; d += blockDim.x) {
    query_shared[d] = __half2float(query[query_offset + d]);
+   output_shared[d] = 0.0f;
+  }
+  if (tid == 0) {
+   running_max = -CUDART_INF_F;
+   running_sum = 0.0f;
+  }
   __syncthreads();
 
   const float scale = rsqrtf(static_cast<float>(hs));
-  float local_max = -CUDART_INF_F;
-  for (int t = tid; t <= query_pos; t += blockDim.x) {
+  for (int t = 0; t <= query_pos; ++t) {
    const __half* key =
        kc + layer_base + static_cast<size_t>(t) * kv_dim + kv_head_offset;
    float dot = 0.0f;
-   for (int d = 0; d < hs; ++d)
+   for (int d = tid; d < hs; d += blockDim.x) {
     dot += query_shared[d] * __half2float(key[d]);
-   const float value = dot * scale;
-   score[score_base + t] = __float2half(value);
-   local_max = fmaxf(local_max, value);
-  }
-
-  local_max = batched_warp_reduce_max(local_max);
-  if (lane == 0) warp_values[warp] = local_max;
-  __syncthreads();
-  if (warp == 0) {
-   float value = lane < warp_count ? warp_values[lane] : -CUDART_INF_F;
-   value = batched_warp_reduce_max(value);
-   if (lane == 0) block_value = value;
-  }
-  __syncthreads();
-
-  float local_sum = 0.0f;
-  for (int t = tid; t <= query_pos; t += blockDim.x) {
-   const float value = expf(__half2float(score[score_base + t]) - block_value);
-   score[score_base + t] = __float2half(value);
-   local_sum += value;
-  }
-  local_sum = batched_warp_reduce_sum(local_sum);
-  if (lane == 0) warp_values[warp] = local_sum;
-  __syncthreads();
-  if (warp == 0) {
-   float value = lane < warp_count ? warp_values[lane] : 0.0f;
-   value = batched_warp_reduce_sum(value);
-   if (lane == 0) block_value = value;
-  }
-  __syncthreads();
-
-  const float inv_sum = 1.0f / block_value;
-  for (int d = tid; d < hs; d += blockDim.x) {
-   float value = 0.0f;
-   for (int t = 0; t <= query_pos; ++t) {
-    const __half* value_row =
-        vc + layer_base + static_cast<size_t>(t) * kv_dim + kv_head_offset;
-    value += __half2float(score[score_base + t]) * inv_sum *
-             __half2float(value_row[d]);
    }
+   dot = batched_warp_reduce_sum(dot);
+   if (lane == 0) warp_values[warp] = dot;
+   __syncthreads();
+   if (warp == 0) {
+    float value = lane < warp_count ? warp_values[lane] : 0.0f;
+    value = batched_warp_reduce_sum(value);
+    if (lane == 0) block_dot = value;
+   }
+   __syncthreads();
+
+   if (tid == 0) {
+    const float score = block_dot * scale;
+    const float next_max = fmaxf(running_max, score);
+    old_scale = running_sum > 0.0f ? expf(running_max - next_max) : 0.0f;
+    token_scale = expf(score - next_max);
+    running_sum = running_sum * old_scale + token_scale;
+    running_max = next_max;
+   }
+   __syncthreads();
+
+   const __half* value_row =
+       vc + layer_base + static_cast<size_t>(t) * kv_dim + kv_head_offset;
+   for (int d = tid; d < hs; d += blockDim.x) {
+    output_shared[d] = output_shared[d] * old_scale +
+                       token_scale * __half2float(value_row[d]);
+   }
+   __syncthreads();
+  }
+
+  const float inv_sum = running_sum > 0.0f ? 1.0f / running_sum : 0.0f;
+  for (int d = tid; d < hs; d += blockDim.x) {
    output[static_cast<size_t>(row) * dim + head * hs + d] =
-       __float2half(value);
+       __float2half(output_shared[d] * inv_sum);
   }
  }
  }  // namespace
@@ -161,13 +302,6 @@ namespace wmma = nvcuda::wmma;
 namespace {
 
 constexpr int kWarpSize = 32;
-
-__device__ __forceinline__ float warp_reduce_max(float value) {
-  for (int offset = kWarpSize / 2; offset > 0; offset /= 2) {
-    value = fmaxf(value, __shfl_down_sync(0xffffffff, value, offset));
-  }
-  return value;
-}
 
 __device__ __forceinline__ float warp_reduce_sum(float value) {
   for (int offset = kWarpSize / 2; offset > 0; offset /= 2) {
@@ -180,7 +314,7 @@ __device__ __forceinline__ float warp_reduce_sum(float value) {
 __global__ void batched_mha_prefill_generic_kernel(
     int start_pos, int seq_len, int max_seq_len, int dim, int kv_dim,
     int kv_mul, int heads, int head_size, int layer, const __half* query,
-    __half* score, const __half* key_cache, const __half* value_cache,
+    const __half* key_cache, const __half* value_cache,
     __half* output) {
   const int head = blockIdx.x;
   const int row = blockIdx.y;
@@ -193,70 +327,69 @@ __global__ void batched_mha_prefill_generic_kernel(
   const int query_pos = start_pos + row;
   const int kv_head_offset = (head / kv_mul) * head_size;
   const size_t layer_base = static_cast<size_t>(layer) * max_seq_len * kv_dim;
-  const size_t score_base =
-      (static_cast<size_t>(row) * heads + head) * max_seq_len;
 
-  extern __shared__ float query_shared[];
+  extern __shared__ float shared[];
+  float* query_shared = shared;
+  float* output_shared = shared + head_size;
   __shared__ float warp_values[4];
-  __shared__ float block_value;
+  __shared__ float block_dot;
+  __shared__ float running_max;
+  __shared__ float running_sum;
+  __shared__ float old_scale;
+  __shared__ float token_scale;
 
   for (int d = tid; d < head_size; d += blockDim.x) {
     query_shared[d] =
         __half2float(query[static_cast<size_t>(row) * dim + head * head_size + d]);
+    output_shared[d] = 0.0f;
+  }
+  if (tid == 0) {
+    running_max = -CUDART_INF_F;
+    running_sum = 0.0f;
   }
   __syncthreads();
 
   const float scale = rsqrtf(static_cast<float>(head_size));
-  float local_max = -CUDART_INF_F;
-  for (int kv_pos = tid; kv_pos <= query_pos; kv_pos += blockDim.x) {
+  for (int kv_pos = 0; kv_pos <= query_pos; ++kv_pos) {
     const __half* key = key_cache + layer_base +
                         static_cast<size_t>(kv_pos) * kv_dim + kv_head_offset;
     float dot = 0.0f;
-    for (int d = 0; d < head_size; ++d) {
+    for (int d = tid; d < head_size; d += blockDim.x) {
       dot += query_shared[d] * __half2float(key[d]);
     }
-    const float value = dot * scale;
-    score[score_base + kv_pos] = __float2half(value);
-    local_max = fmaxf(local_max, value);
-  }
-
-  local_max = warp_reduce_max(local_max);
-  if (lane == 0) warp_values[warp] = local_max;
-  __syncthreads();
-  if (warp == 0) {
-    float value = lane < warp_count ? warp_values[lane] : -CUDART_INF_F;
-    value = warp_reduce_max(value);
-    if (lane == 0) block_value = value;
-  }
-  __syncthreads();
-
-  float local_sum = 0.0f;
-  for (int kv_pos = tid; kv_pos <= query_pos; kv_pos += blockDim.x) {
-    const float value = expf(__half2float(score[score_base + kv_pos]) - block_value);
-    score[score_base + kv_pos] = __float2half(value);
-    local_sum += value;
-  }
-  local_sum = warp_reduce_sum(local_sum);
-  if (lane == 0) warp_values[warp] = local_sum;
-  __syncthreads();
-  if (warp == 0) {
-    float value = lane < warp_count ? warp_values[lane] : 0.0f;
-    value = warp_reduce_sum(value);
-    if (lane == 0) block_value = value;
-  }
-  __syncthreads();
-
-  const float inv_sum = 1.0f / block_value;
-  for (int d = tid; d < head_size; d += blockDim.x) {
-    float value = 0.0f;
-    for (int kv_pos = 0; kv_pos <= query_pos; ++kv_pos) {
-      const __half* value_row = value_cache + layer_base +
-                                static_cast<size_t>(kv_pos) * kv_dim + kv_head_offset;
-      value += __half2float(score[score_base + kv_pos]) * inv_sum *
-               __half2float(value_row[d]);
+    dot = warp_reduce_sum(dot);
+    if (lane == 0) warp_values[warp] = dot;
+    __syncthreads();
+    if (warp == 0) {
+      float value = lane < warp_count ? warp_values[lane] : 0.0f;
+      value = warp_reduce_sum(value);
+      if (lane == 0) block_dot = value;
     }
+    __syncthreads();
+
+    if (tid == 0) {
+      const float score = block_dot * scale;
+      const float next_max = fmaxf(running_max, score);
+      old_scale = running_sum > 0.0f ? expf(running_max - next_max) : 0.0f;
+      token_scale = expf(score - next_max);
+      running_sum = running_sum * old_scale + token_scale;
+      running_max = next_max;
+    }
+    __syncthreads();
+
+    const __half* value_row = value_cache + layer_base +
+                              static_cast<size_t>(kv_pos) * kv_dim + kv_head_offset;
+    for (int d = tid; d < head_size; d += blockDim.x) {
+      output_shared[d] = output_shared[d] * old_scale +
+                         token_scale * __half2float(value_row[d]);
+    }
+    __syncthreads();
+  }
+
+  const float inv_sum = running_sum > 0.0f ? 1.0f / running_sum : 0.0f;
+  for (int d = tid; d < head_size; d += blockDim.x) {
     output[static_cast<size_t>(row) * dim + head * head_size + d] =
-        __float2half(value);
+        __float2half(output_shared[d] * inv_sum);
   }
 }
 
@@ -578,20 +711,19 @@ constexpr int kPrefillSharedBytes =
                             int32_t layer_index, int32_t max_seq_len, int32_t dim,
                             int32_t kv_dim, int32_t kv_mul, int32_t head_size,
                             const tensor::Tensor& output, const tensor::Tensor& query,
-                            const tensor::Tensor& score, const tensor::Tensor& key_cache,
-                            const tensor::Tensor& value_cache, CudaConfig* config) {
+                            const tensor::Tensor& key_cache, const tensor::Tensor& value_cache,
+                            CudaConfig* config) {
 #if INFER_BATCHED_MHA_BACKEND == 0
   dim3 grid(head_num, seq_len);
   batched_mha_fp16<<<grid, kBatchedBlockThreads,
-                      head_size * sizeof(float), config->stream>>>(
+                      2 * head_size * sizeof(float), config->stream>>>(
       start_pos, seq_len, max_seq_len, dim, kv_dim, kv_mul, head_num, head_size,
-      layer_index, query.ptr<__half>(), const_cast<__half*>(score.ptr<__half>()),
-      key_cache.ptr<__half>(), value_cache.ptr<__half>(), const_cast<__half*>(output.ptr<__half>()));
+      layer_index, query.ptr<__half>(), key_cache.ptr<__half>(), value_cache.ptr<__half>(),
+      const_cast<__half*>(output.ptr<__half>()));
 #else
   CHECK(config);
   CHECK(output.data_type() == base::DataType::kDataTypeFp16);
   CHECK(query.data_type() == base::DataType::kDataTypeFp16);
-  CHECK(score.data_type() == base::DataType::kDataTypeFp16);
   CHECK(key_cache.data_type() == base::DataType::kDataTypeFp16);
   CHECK(value_cache.data_type() == base::DataType::kDataTypeFp16);
   CHECK_GE(start_pos, 0);
@@ -608,7 +740,6 @@ constexpr int kPrefillSharedBytes =
   CHECK_LE((head_num + kv_mul - 1) / kv_mul, kv_dim / head_size);
   CHECK_GE(output.size(), static_cast<size_t>(seq_len) * dim);
   CHECK_GE(query.size(), static_cast<size_t>(seq_len) * dim);
-  CHECK_GE(score.size(), static_cast<size_t>(seq_len) * head_num * max_seq_len);
   const size_t cache_size =
       static_cast<size_t>(layer_index + 1) * max_seq_len * kv_dim;
   CHECK_GE(key_cache.size(), cache_size);
@@ -637,11 +768,10 @@ constexpr int kPrefillSharedBytes =
   } else {
     dim3 grid(head_num, seq_len);
     batched_mha_prefill_generic_kernel<<<grid, 128,
-                                         head_size * sizeof(float),
+                                         2 * head_size * sizeof(float),
                                          config->stream>>>(
         start_pos, seq_len, max_seq_len, dim, kv_dim, kv_mul, head_num,
-        head_size, layer_index, query.ptr<__half>(),
-        const_cast<__half*>(score.ptr<__half>()), key_cache.ptr<__half>(),
+        head_size, layer_index, query.ptr<__half>(), key_cache.ptr<__half>(),
         value_cache.ptr<__half>(), const_cast<__half*>(output.ptr<__half>()));
   }
 #endif

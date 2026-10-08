@@ -81,7 +81,7 @@ TEST(test_qwen3, cuda)
   auto status = model.init(base::DeviceType::kDeviceCUDA);
   ASSERT_TRUE(status) << "Qwen3 model initialization failed: " << status.get_err_msg();
   // Total sequence length = prompt length + generated tokens.
-  const int total_steps = 32;
+  const int total_steps = 128;
 
   {
     std::string hi = "What is AI?";

@@ -200,10 +200,10 @@ void Tensor::reshape(const std::vector<int32_t>& dims) {
     return;
   }
 
-  if (size > size_) {
+  const size_t byte_size = size * base::DataTypeSize(this->data_type_);
+  if (byte_size > buffer_->byte_size()) {
     auto new_buffer = std::make_shared<base::Buffer>(size * base::DataTypeSize(this->data_type_),
                                                      buffer_->get_allocator());
-    CHECK(new_buffer->allocate());
     new_buffer->copy_from(buffer_.get());
     this->buffer_ = new_buffer;
   }

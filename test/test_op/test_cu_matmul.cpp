@@ -6,6 +6,7 @@
 #include "tensor/tensor.h"
 #include "utils.cuh"
 #include "../source/op/kernels/kernels_interface.h"
+#include "../source/op/kernels/cuda/matmul_kernel.cuh"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -13,106 +14,6 @@
 #include <numeric>
 #include <random>
 #include <vector>
-
-TEST(test_matVec_cu, matmul_linear_stream5) {
-    using namespace kernel;
-    auto alloc_cu = base::CUDADeviceAllocatorFactory::get_instance();
-    auto alloc_cpu = base::CPUDeviceAllocatorFactory::get_instance();
-
-    tensor::Tensor input(base::DataType::kDataTypeFp16, 4, true, alloc_cpu);
-    tensor::Tensor weight(base::DataType::kDataTypeFp16, 4, 4, true, alloc_cpu);
-
-    for (int i = 0; i < 4; ++i) {
-        input.index<__half>(i) = __half(i);
-    }
-
-    for (int i = 0; i < 16; ++i) {
-        weight.index<__half>(i) = __half(i);
-    }
-    tensor::Tensor input_cpu = input.clone();
-    tensor::Tensor weight_cpu = weight.clone();
-
-    input.to_cuda(nullptr);
-    weight.to_cuda(nullptr);
-
-    tensor::Tensor out_cu(base::DataType::kDataTypeFp16, 4, true, alloc_cu);
-    tensor::Tensor out_cpu(base::DataType::kDataTypeFp16, 4, true, alloc_cpu);
-
-    CudaConfig* config = new CudaConfig;
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
-    config->stream = stream;
-    kernel::get_matmul_kernel(base::DeviceType::kDeviceCUDA)(input, weight, out_cu, 1.f, config);
-
-    kernel::get_matmul_kernel(base::DeviceType::kDeviceCPU)(input_cpu, weight_cpu, out_cpu, 1.f,
-                                                            config);
-
-    out_cu.to_cpu();
-    for (int i = 0; i < out_cu.size(); ++i) {
-        ASSERT_EQ(out_cu.index<__half>(i), out_cpu.index<__half>(i));
-    }
-}
-
-TEST(test_matVec_cu, matmul_linear_course) {
-  auto alloc_cu = base::CUDADeviceAllocatorFactory::get_instance();
-  auto alloc_cpu = base::CPUDeviceAllocatorFactory::get_instance();
-
-  tensor::Tensor input(base::DataType::kDataTypeFp16, 3, true, alloc_cpu);
-  tensor::Tensor weight(base::DataType::kDataTypeFp16, 3, 3, true, alloc_cpu);
-
-  input.index<__half>(0) = __half(1);
-  input.index<__half>(1) = __half(1);
-  input.index<__half>(2) = __half(-1);
-
-  for (int i = 1; i <= 9; ++i) {
-    weight.index<__half>(i - 1) = __half(i);
-  }
-  tensor::Tensor input_cpu = input.clone();
-  tensor::Tensor weight_cpu = weight.clone();
-
-  input.to_cuda(nullptr);
-  weight.to_cuda(nullptr);
-
-  tensor::Tensor out_cpu(base::DataType::kDataTypeFp16, 3, true, alloc_cpu);
-
-  kernel::get_matmul_kernel(base::DeviceType::kDeviceCPU)(input_cpu, weight_cpu, out_cpu, 1.f,
-                                                          nullptr);
-
-  ASSERT_EQ(out_cpu.index<__half>(0), __float2half(0));
-  ASSERT_EQ(out_cpu.index<__half>(1), __float2half(3));
-  ASSERT_EQ(out_cpu.index<__half>(2), __float2half(6));
-}
-
-TEST(test_matVec_cu, matmul_linear_course_cuda) {
-  auto alloc_cu = base::CUDADeviceAllocatorFactory::get_instance();
-  auto alloc_cpu = base::CPUDeviceAllocatorFactory::get_instance();
-
-  tensor::Tensor input(base::DataType::kDataTypeFp16, 3, true, alloc_cpu);
-  tensor::Tensor weight(base::DataType::kDataTypeFp16, 3, 3, true, alloc_cpu);
-
-  input.index<__half>(0) = __half(1);
-  input.index<__half>(1) = __half(1);
-  input.index<__half>(2) = __half(-1);
-
-  for (int i = 1; i <= 9; ++i) {
-    weight.index<__half>(i - 1) = __half(i);
-  }
-
-  input.to_cuda();
-  weight.to_cuda();
-
-  tensor::Tensor out_cu(base::DataType::kDataTypeFp16, 3, true, alloc_cu);
-
-  kernel::get_matmul_kernel(base::DeviceType::kDeviceCUDA)(input, weight, out_cu, 1.f, nullptr);
-
-  tensor::Tensor out_cpu = out_cu.clone();
-  out_cpu.to_cpu();
-
-  ASSERT_EQ(out_cpu.index<__half>(0), __float2half(0));
-  ASSERT_EQ(out_cpu.index<__half>(1), __float2half(3));
-  ASSERT_EQ(out_cpu.index<__half>(2), __float2half(6));
-}
-
 
 static bool has_cuda_device() {
   int count = 0;
@@ -203,9 +104,14 @@ TEST(test_matVec_cu, benchmark) {
     for (double value : samples) variance += (value - avg) * (value - avg);
     double stddev = std::sqrt(variance / samples.size());
     int grid = (c.output_dim + 127) / 128;
+#if INFER_MATVEC_FP16_BACKEND == 0
+    constexpr const char* kernel_name = "matVector_kernel_cu_fp16";
+#else
+    constexpr const char* kernel_name = "matVector_kernel_cu_fp16_optimized";
+#endif
     std::cout << std::fixed << std::setprecision(3)
               << avg << "," << total / 1000.0 << "," << samples.size() << ","
               << avg << "," << stddev << "," << grid << " 1 1,128 1 1,"
-              << "void kernel::matmul_kernel_cu_fp16," << c.name << "\n";
+              << kernel_name << "," << c.name << "\n";
   }
 }

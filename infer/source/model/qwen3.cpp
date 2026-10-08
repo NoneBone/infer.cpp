@@ -234,7 +234,7 @@ base::Status Qwen3Model::forward(const tensor::Tensor& input, const tensor::Tens
 }
 
 base::Status Qwen3Model::prefill(const tensor::Tensor& input, int32_t seq_len,
-                                  int32_t start_pos) const {
+                                  int32_t start_pos, const tensor::Tensor* all_logits) const {
   if (device_type_ != base::DeviceType::kDeviceCUDA) {
     return base::error::InternalError("Prefill GEMM currently requires CUDA");
   }
@@ -259,8 +259,6 @@ base::Status Qwen3Model::prefill(const tensor::Tensor& input, int32_t seq_len,
   tensor::Tensor value(base::DataType::kDataTypeFp16, seq_len, kv_dim, true, cuda_alloc);
   tensor::Tensor mha_out(base::DataType::kDataTypeFp16, seq_len, attn_dim, true, cuda_alloc);
   tensor::Tensor wo_out(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
-  tensor::Tensor score(base::DataType::kDataTypeFp16, seq_len, config_->head_num_, max_seq,
-                       true, cuda_alloc);
   tensor::Tensor ffn_norm(base::DataType::kDataTypeFp16, seq_len, dim, true, cuda_alloc);
   tensor::Tensor w1_out(base::DataType::kDataTypeFp16, seq_len, hidden_dim, true, cuda_alloc);
   tensor::Tensor w3_out(base::DataType::kDataTypeFp16, seq_len, hidden_dim, true, cuda_alloc);
@@ -413,7 +411,7 @@ base::Status Qwen3Model::prefill(const tensor::Tensor& input, int32_t seq_len,
     } else {
       kernel::batched_mha_kernel_cu(start_pos, seq_len, config_->head_num_, layer, max_seq,
                             attn_dim, kv_dim, config_->kv_mul_, config_->head_size_, mha_out,
-                            query, score, get_buffer(ModelBufferType::kKeyCache),
+                            query, get_buffer(ModelBufferType::kKeyCache),
                             get_buffer(ModelBufferType::kValueCache), cuda_config_.get());
     }
     auto wo = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->wo_layers_.at(layer));
@@ -498,6 +496,18 @@ base::Status Qwen3Model::prefill(const tensor::Tensor& input, int32_t seq_len,
   tensor::Tensor& final_hidden = (config_->layer_num_ % 2 == 0) ? hidden0 : hidden1;
   STATUS_CHECK(qwen_layers_->rmsnorm_layers_.at(2 * config_->layer_num_)->forward(
       final_hidden, final_hidden));
+  if (all_logits != nullptr) {
+    if (all_logits->device_type() != device_type_ ||
+        all_logits->data_type() != base::DataType::kDataTypeFp16 ||
+        all_logits->dims_size() != 2 || all_logits->get_dim(0) != seq_len ||
+        all_logits->get_dim(1) != config_->vocab_size_) {
+      return base::error::InvalidArgument("Invalid full prefill logits shape or device");
+    }
+    auto cls = std::dynamic_pointer_cast<op::MatmulLayer>(qwen_layers_->cls_layer_);
+    CHECK(cls != nullptr);
+    return qwen_layers_->batched_matmul_helper_layer_->forward(
+        final_hidden, cls->get_weight(0), *all_logits, seq_len, 1.f);
+  }
   auto final_buffer = std::make_shared<base::Buffer>(
       static_cast<size_t>(dim) * sizeof(__half), nullptr,
       const_cast<__half*>(final_hidden.ptr<__half>(static_cast<size_t>(seq_len - 1) * dim)), true);
@@ -1031,8 +1041,10 @@ void Qwen3Model::feed_forward(int32_t layer_idx, const tensor::Tensor& input) co
 }
 
 op::EmbeddingOutput Qwen3Model::embedding(const std::vector<int>& tokens) const {
-  auto input_tokens = get_buffer(ModelBufferType::kInputTokens);
-  auto input_embeddings = get_buffer(ModelBufferType::kInputEmbeddings);
+  auto& input_tokens =
+      const_cast<tensor::Tensor&>(get_buffer(ModelBufferType::kInputTokens));
+  auto& input_embeddings =
+      const_cast<tensor::Tensor&>(get_buffer(ModelBufferType::kInputEmbeddings));
   if (input_tokens.size() != tokens.size()) {
     input_tokens.reshape({static_cast<int32_t>(tokens.size())});
     input_embeddings.reshape({static_cast<int32_t>(tokens.size()), config_->dim_});

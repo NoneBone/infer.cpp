@@ -4,7 +4,6 @@
 #include "matmul_kernel.cuh"
 #include <cub/block/block_reduce.cuh>
 
-#define BATCHED_MATMUL_FP16_BACKEND 1
 
 #define WARP_SIZE 32
 #define LDST32BITS(value) (reinterpret_cast<half2 *>(&(value))[0])
@@ -45,6 +44,7 @@ inline __device__ __host__ size_t div_ceil(size_t a, size_t b) {
 namespace wmma = nvcuda::wmma;
 namespace kernel
 {
+#if INFER_MATVEC_FP16_BACKEND == 0
   template <int THREAD_PER_BLOCK, int ROW_PER_BLOCK>
   __global__ void matVector_kernel_cu_fp16(const __half *input, const __half *weight, __half *output, int M,
                                         int K)
@@ -69,22 +69,76 @@ namespace kernel
 
     output[output_idx] = __float2half(sum);
   }
+#else
+  // 一个 block 负责一个输出行，线程沿 K 维协作读取连续的 weight/input。
+  // 偶数 K 使用 half2 向量化加载，最后用 CUB 做块内 FP32 归约。
+  template <int THREAD_PER_BLOCK>
+  __global__ void matVector_kernel_cu_fp16_optimized(
+      const __half *__restrict__ input, const __half *__restrict__ weight,
+      __half *__restrict__ output, int M, int K, float scale)
+  {
+    using BlockReduce = cub::BlockReduce<float, THREAD_PER_BLOCK>;
+    __shared__ typename BlockReduce::TempStorage reduce_storage;
+
+    const int output_idx = blockIdx.x;
+    const int tid = threadIdx.x;
+    if (output_idx >= M)
+      return;
+
+    const __half *weight_row = weight + static_cast<size_t>(output_idx) * K;
+    float local_sum = 0.0f;
+
+    // K 偶数时，input 和每一行 weight 都满足 half2 对齐条件。
+    if ((K & 1) == 0)
+    {
+      const int vector_count = K >> 1;
+      const __half2 *input_vec = reinterpret_cast<const __half2 *>(input);
+      const __half2 *weight_vec = reinterpret_cast<const __half2 *>(weight_row);
+      for (int index = tid; index < vector_count; index += THREAD_PER_BLOCK)
+      {
+        const float2 input_pair = __half22float2(input_vec[index]);
+        const float2 weight_pair = __half22float2(weight_vec[index]);
+        local_sum += input_pair.x * weight_pair.x +
+                     input_pair.y * weight_pair.y;
+      }
+    }
+    else
+    {
+      // 奇数 K 时各 weight 行的起始地址会交替失去 half2 对齐，使用
+      // 合并的标量读取保证任意行地址都合法；偶数 K 走上面的向量路径。
+      for (int index = tid; index < K; index += THREAD_PER_BLOCK)
+      {
+        local_sum += __half2float(input[index]) * __half2float(weight_row[index]);
+      }
+    }
+
+    const float sum = BlockReduce(reduce_storage).Sum(local_sum);
+    if (tid == 0)
+    {
+      output[output_idx] = __float2half(sum * scale);
+    }
+  }
+#endif
 
   void matmul_kernel_cu(const tensor::Tensor &input, const tensor::Tensor &weight,
                         const tensor::Tensor &output, const float scale, const CudaConfig *config)
   {
-    UNUSED(scale);
     CHECK(input.is_empty() == false && input.dims_size() <= 2);
     CHECK(input.device_type() == base::DeviceType::kDeviceCUDA);
+    CHECK(input.data_type() == base::DataType::kDataTypeFp16);
 
     CHECK(weight.is_empty() == false && weight.dims_size() == 2);
     CHECK(weight.device_type() == base::DeviceType::kDeviceCUDA);
+    CHECK(weight.data_type() == base::DataType::kDataTypeFp16);
+    CHECK(output.device_type() == base::DeviceType::kDeviceCUDA);
+    CHECK(output.data_type() == base::DataType::kDataTypeFp16);
     const int32_t M = weight.get_dim(0); // output rows
     const int32_t K = weight.get_dim(1); // input columns
-    CHECK_EQ(K, input.get_dim(0));
+    CHECK(input.get_dim(input.dims_size() - 1) == K);
     CHECK_EQ(output.get_dim(0), M);
 
     constexpr int threads = 128;
+#if INFER_MATVEC_FP16_BACKEND == 0
     const int blocks = (M + threads - 1) / threads;
     if (config && config->stream)
     {
@@ -96,6 +150,13 @@ namespace kernel
       matVector_kernel_cu_fp16<128, 1><<<blocks, threads>>>(input.ptr<__half>(), weight.ptr<__half>(),
                                                          const_cast<__half *>(output.ptr<__half>()), M, K);
     }
+#else
+    const dim3 grid(M);
+    const cudaStream_t stream = config ? config->stream : nullptr;
+    matVector_kernel_cu_fp16_optimized<threads><<<grid, threads, 0, stream>>>(
+        input.ptr<__half>(), weight.ptr<__half>(),
+        const_cast<__half *>(output.ptr<__half>()), M, K, scale);
+#endif
   }
 
 #if BATCHED_MATMUL_FP16_BACKEND == 0

@@ -1,5 +1,6 @@
 #include "base/buffer.h"
 #include <glog/logging.h>
+#include <algorithm>
 
 namespace base {
 Buffer::Buffer(size_t byte_size, std::shared_ptr<DeviceAllocator> allocator,
@@ -40,20 +41,21 @@ bool Buffer::allocate() {
 void Buffer::copy_from(const Buffer& src) const{// 引用写法，传入的是实际对象
     CHECK(allocator_ != nullptr);
     CHECK(ptr_ != nullptr);
+    const size_t copy_size = std::min(byte_size_, src.byte_size_);
     const DeviceType& src_device = src.device_type_;// & 表示引用, 采用 src_device 作为 右值的别名
     const DeviceType& dst_device = this->device_type_;
     if(src_device == DeviceType::kDeviceCPU && dst_device == DeviceType::kDeviceCUDA){
         // h2d    
-        return allocator_->memcpy(src.ptr(), this->ptr_, byte_size_, MemcpyKind::kMemcpyCPU2CUDA);
+        return allocator_->memcpy(src.ptr(), this->ptr_, copy_size, MemcpyKind::kMemcpyCPU2CUDA);
     }else if(src_device == DeviceType::kDeviceCPU && dst_device == DeviceType::kDeviceCPU){
         // h2h
-        return allocator_->memcpy(src.ptr(), this->ptr_, byte_size_, MemcpyKind::kMemcpyCPU2CPU);
+        return allocator_->memcpy(src.ptr(), this->ptr_, copy_size, MemcpyKind::kMemcpyCPU2CPU);
     }else if(src_device == DeviceType::kDeviceCUDA && dst_device == DeviceType::kDeviceCPU){
         // d2h
-        return allocator_->memcpy(src.ptr(), this->ptr_, byte_size_, MemcpyKind::kMemcpyCUDA2CPU);
+        return allocator_->memcpy(src.ptr(), this->ptr_, copy_size, MemcpyKind::kMemcpyCUDA2CPU);
     }else if(src_device == DeviceType::kDeviceCUDA && dst_device == DeviceType::kDeviceCUDA){
         // d2d
-        return allocator_->memcpy(src.ptr(), this->ptr_, byte_size_, MemcpyKind::kMemcpyCUDACUDA);
+        return allocator_->memcpy(src.ptr(), this->ptr_, copy_size, MemcpyKind::kMemcpyCUDACUDA);
     }else{
         LOG(INFO) << "unknown memcpy kind" << std::endl;
     }
